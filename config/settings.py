@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "accounts",
+    "api",
     "monitors",
     "reports",
 ]
@@ -106,6 +107,7 @@ LOGOUT_REDIRECT_URL = "login"
 EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
 DEFAULT_FROM_EMAIL = "uptime@example.com"
 
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")  # where the SPA lives (links in emails)
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 CACHES = {
     "default": {
