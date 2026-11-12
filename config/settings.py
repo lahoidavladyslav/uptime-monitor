@@ -144,6 +144,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "monitors.tasks.schedule_checks",
         "schedule": 60.0,
     },
+    "dispatch-outbox": {
+        "task": "monitors.tasks.dispatch_outbox",
+        "schedule": 15.0,
+    },
+    "cleanup-outbox": {
+        "task": "monitors.tasks.cleanup_outbox",
+        "schedule": crontab(hour=3, minute=45),
+    },
     "build-rollups": {
         "task": "monitors.tasks.build_rollups",
         "schedule": crontab(minute="*/5"),
@@ -187,6 +195,9 @@ CELERY_TASK_DEFAULT_QUEUE = "checks"
 CELERY_TASK_ROUTES = {
     "monitors.tasks.send_incident_notification": {"queue": "notifications"},
     "monitors.tasks.send_ssl_alert": {"queue": "notifications"},
+    "monitors.tasks.dispatch_outbox": {"queue": "notifications"},
+    "monitors.tasks.deliver_outbox_event": {"queue": "notifications"},
+    "monitors.tasks.cleanup_outbox": {"queue": "notifications"},
     "monitors.tasks.notify_subscribers": {"queue": "notifications"},
     "monitors.tasks.send_subscriber_email": {"queue": "notifications"},
     "monitors.tasks.send_subscription_confirmation": {"queue": "notifications"},

@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import ops, public, subscribe_views, views
+from . import ops, public, subscribe_views, views, webhook_views
 
 urlpatterns = [
     path("healthz/", ops.healthz, name="healthz"),
@@ -16,6 +16,18 @@ urlpatterns = [
         "monitors/<int:pk>/maintenance/<int:window_id>/delete/",
         views.MaintenanceDeleteView.as_view(),
         name="maintenance_delete",
+    ),
+    path("monitors/<int:pk>/webhooks/", webhook_views.WebhooksView.as_view(), name="webhooks"),
+    path("monitors/<int:pk>/webhooks/new/", webhook_views.WebhookCreateView.as_view(), name="webhook_create"),
+    path(
+        "monitors/<int:pk>/webhooks/<int:endpoint_id>/delete/",
+        webhook_views.WebhookDeleteView.as_view(),
+        name="webhook_delete",
+    ),
+    path(
+        "monitors/<int:pk>/webhooks/events/<int:event_id>/retry/",
+        webhook_views.WebhookRetryView.as_view(),
+        name="webhook_retry",
     ),
     path("pages/", views.StatusPageListView.as_view(), name="statuspage_list"),
     path("pages/new/", views.StatusPageCreateView.as_view(), name="statuspage_new"),

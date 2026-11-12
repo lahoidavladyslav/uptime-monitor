@@ -3,7 +3,7 @@ from django.utils import timezone
 
 from .checks import headers_to_lines, parse_header_lines, parse_status_spec
 from .formkit import BootstrapFormMixin, HttpURLField
-from .models import MaintenanceWindow, Monitor, StatusPage
+from .models import MaintenanceWindow, Monitor, StatusPage, WebhookEndpoint
 from .security import blocked_reason
 
 
@@ -115,3 +115,18 @@ class StatusPageForm(BootstrapFormMixin, forms.ModelForm):
         # a user can only publish their own monitors
         self.fields["monitors"].queryset = Monitor.objects.filter(user=user)
         self.fields["monitors"].required = False
+
+
+class WebhookEndpointForm(BootstrapFormMixin, forms.ModelForm):
+    class Meta:
+        model = WebhookEndpoint
+        fields = ["url"]
+
+    url = HttpURLField(label="Webhook URL", max_length=500)
+
+    def clean_url(self):
+        url = self.cleaned_data["url"]
+        reason = blocked_reason(url)  # resolves DNS: a name pointing at 10.x/127.x/169.254.x is refused
+        if reason:
+            raise forms.ValidationError(reason)
+        return url

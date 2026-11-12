@@ -1,9 +1,13 @@
 import secrets
+import uuid
 
 from django.conf import settings
 from django.core.validators import URLValidator
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
+
+from accounts.fields import EncryptedTextField
 
 http_url_validator = URLValidator(schemes=["http", "https"])
 
@@ -210,3 +214,51 @@ class Subscriber(models.Model):
     @property
     def is_confirmed(self):
         return self.confirmed_at is not None
+
+
+def _new_webhook_secret():
+    return secrets.token_urlsafe(32)
+
+
+class WebhookEndpoint(models.Model):
+    """Where a monitor's incident events are POSTed (signed with HMAC-SHA256 using `secret`)."""
+
+    monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE, related_name="webhooks")
+    url = models.URLField("URL", max_length=500, validators=[http_url_validator])
+    # the receiver needs it in clear to verify signatures, so it is encrypted at rest, not hashed
+    secret = EncryptedTextField(default=_new_webhook_secret)
+    is_active = models.BooleanField("Активний", default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+
+
+class OutboxEvent(models.Model):
+    """Transactional outbox: written in the same transaction as the Incident, delivered later, at least once.
+
+    One row per (event x endpoint). `event_id` goes out as X-Event-Id so a receiver can drop duplicates.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "pending"
+        DELIVERED = "delivered", "delivered"
+        DEAD = "dead", "dead"
+
+    event_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    endpoint = models.ForeignKey(WebhookEndpoint, on_delete=models.CASCADE, related_name="events")
+    event_type = models.CharField(max_length=40)
+    payload = models.JSONField()
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now)
+    last_error = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-id"]
+        indexes = [
+            # the dispatcher only ever looks at pending rows, ordered by due time
+            models.Index(fields=["next_attempt_at"], condition=Q(status="pending"), name="outbox_pending_due_idx"),
+        ]

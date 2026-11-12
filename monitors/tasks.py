@@ -12,10 +12,18 @@ from django.db.models import DateTimeField, DurationField, Exists, ExpressionWra
 from django.urls import reverse
 from django.utils import timezone
 
-from . import rollups, subscriptions
+from . import rollups, subscriptions, webhooks
 from .checks import MAX_BODY_BYTES, evaluate
 from .http_client import guarded_session
-from .models import CheckResult, CheckRollupHourly, Incident, MaintenanceWindow, Monitor, Subscriber
+from .models import (
+    CheckResult,
+    CheckRollupHourly,
+    Incident,
+    MaintenanceWindow,
+    Monitor,
+    OutboxEvent,
+    Subscriber,
+)
 from .security import blocked_reason
 
 logger = logging.getLogger(__name__)
@@ -118,11 +126,13 @@ def update_incident(monitor, result):
                 )
         except IntegrityError:
             return
+        webhooks.enqueue_incident_event(monitor, incident, "incident.opened")  # same transaction as the incident
         transaction.on_commit(lambda: _notify_everyone(incident.pk, "opened"))
     elif result.is_up and open_incident is not None:
         open_incident.resolved_at = result.checked_at
         open_incident.save(update_fields=["resolved_at"])
         incident_id = open_incident.pk
+        webhooks.enqueue_incident_event(monitor, open_incident, "incident.resolved")
         transaction.on_commit(lambda: _notify_everyone(incident_id, "resolved"))
 
 
@@ -443,3 +453,49 @@ def build_rollups():
     its own hour open), with a single INSERT ... ON CONFLICT DO UPDATE."""
     now = timezone.now()
     return rollups.build(rollups.floor_hour(now) - timedelta(hours=1), now + timedelta(seconds=1))
+
+
+# ----------------------------- webhook outbox -----------------------------
+@shared_task
+def dispatch_outbox():
+    """Claim due events (short transaction, SKIP LOCKED, lease) and hand each to its own task: a dead or
+    slow endpoint then occupies only its own delivery, never the queue behind it."""
+    queued = 0
+    for event_id in webhooks.claim_due_events():
+        try:
+            deliver_outbox_event.delay(event_id)
+            queued += 1
+        except Exception:
+            logger.exception("could not queue webhook delivery", extra={"event_id": event_id})  # lease expires, retried
+    return queued
+
+
+@shared_task
+def deliver_outbox_event(event_id):
+    event = (
+        OutboxEvent.objects.select_related("endpoint").filter(pk=event_id, status=OutboxEvent.Status.PENDING).first()
+    )
+    if event is None or not event.endpoint.is_active:
+        return "skipped"  # delivered/dead already (duplicate task) or the endpoint was switched off
+    error = webhooks.send(event)
+    webhooks.record_result(event_id, error)
+    logger.info(
+        "webhook delivery",
+        extra={
+            "event": "webhook_delivery",
+            "event_id": str(event.event_id),
+            "attempt": event.attempts,
+            "ok": error is None,
+        },
+    )
+    return "delivered" if error is None else "failed"
+
+
+@shared_task
+def cleanup_outbox():
+    """Delivered and dead events older than 30 days. Pending ones are never purged."""
+    cutoff = timezone.now() - timedelta(days=30)
+    deleted, _ = OutboxEvent.objects.filter(
+        status__in=[OutboxEvent.Status.DELIVERED, OutboxEvent.Status.DEAD], created_at__lt=cutoff
+    ).delete()
+    return deleted

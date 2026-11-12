@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Webhooks — {{ monitor.name }}{% endblock %}
+{% block content %}
+<nav class="small mb-2"><a href="{% url 'monitor_detail' monitor.pk %}">← {{ monitor.name }}</a></nav>
+<h1 class="h3">Webhooks</h1>
+<p class="text-muted">При відкритті й закритті інциденту ми надсилаємо сюди POST із JSON. Кожен запит підписаний
+HMAC-SHA256 (<code>X-Signature: sha256=…</code> від тіла запиту з секретом), має <code>X-Event-Id</code> і
+<code>X-Timestamp</code>. Доставка «щонайменше раз»: можливі дублі, відсіюйте їх за <code>X-Event-Id</code>.</p>
+
+<div class="card card-body mb-4">
+  <h2 class="h5">Ендпоінти</h2>
+  {% for e in endpoints %}
+    <div class="border-bottom py-2">
+      <div class="d-flex justify-content-between gap-2">
+        <code class="text-break">{{ e.url }}</code>
+        <form method="post" action="{% url 'webhook_delete' monitor.pk e.pk %}">{% csrf_token %}
+          <button class="btn btn-sm btn-outline-danger">Видалити</button>
+        </form>
+      </div>
+      <div class="small text-muted">Секрет: <code>{{ e.secret }}</code></div>
+    </div>
+  {% empty %}<p class="text-muted mb-0">Ще немає жодного.</p>{% endfor %}
+  {% if can_add %}
+  <form method="post" action="{% url 'webhook_create' monitor.pk %}" class="d-flex gap-2 mt-3">{% csrf_token %}
+    <input type="url" name="url" class="form-control" placeholder="https://example.org/hook" required>
+    <button class="btn btn-primary">Додати</button>
+  </form>
+  {% endif %}
+</div>
+
+<h2 class="h5">Журнал доставок</h2>
+<table class="table table-sm align-middle">
+  <thead><tr><th>Час</th><th>Подія</th><th>Ендпоінт</th><th>Статус</th><th>Спроб</th><th>Помилка</th><th></th></tr></thead>
+  <tbody>
+  {% for ev in events %}
+    <tr>
+      <td class="text-nowrap">{{ ev.created_at|date:"Y-m-d H:i:s" }}</td>
+      <td>{{ ev.event_type }}<div class="small text-muted">{{ ev.event_id|stringformat:"s"|slice:":8" }}</div></td>
+      <td class="text-break small">{{ ev.endpoint.url }}</td>
+      <td>{{ ev.status }}</td>
+      <td>{{ ev.attempts }}</td>
+      <td class="small text-break">{{ ev.last_error }}</td>
+      <td>{% if ev.status == "dead" %}
+        <form method="post" action="{% url 'webhook_retry' monitor.pk ev.pk %}">{% csrf_token %}
+          <button class="btn btn-sm btn-outline-primary">Повторити</button></form>{% endif %}</td>
+    </tr>
+  {% empty %}<tr><td colspan="7" class="text-muted">Доставок ще не було.</td></tr>{% endfor %}
+  </tbody>
+</table>
+{% endblock %}
