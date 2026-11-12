@@ -1,12 +1,9 @@
-from datetime import timedelta
-
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.cache import cache
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Count, OuterRef, Q, Subquery
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
@@ -16,9 +13,9 @@ from django.views.generic import CreateView, DeleteView, ListView, UpdateView
 
 from .formkit import FormErrorMessageMixin
 from .forms import MaintenanceForm, MonitorForm, StatusPageForm
-from .models import CheckResult, Incident, MaintenanceWindow, Monitor, StatusPage
-from .services import PERIODS, long_term_uptime, monitor_stats, response_time_series, uptime_percent
-from .tasks import check_monitor, check_ssl, under_maintenance
+from .models import MaintenanceWindow, Monitor, StatusPage
+from .services import PERIODS, dashboard_queryset, long_term_uptime, monitor_stats, response_time_series, uptime_percent
+from .tasks import check_monitor, check_ssl
 
 
 class OwnedMonitorMixin(LoginRequiredMixin):
@@ -50,17 +47,7 @@ class DashboardView(HtmxLoginRequiredMixin, ListView):
         return [self.template_name]
 
     def get_queryset(self):
-        since = timezone.now() - timedelta(hours=24)
-        latest = CheckResult.objects.filter(monitor=OuterRef("pk")).order_by("-checked_at")
-        open_incident = Incident.objects.filter(monitor=OuterRef("pk"), resolved_at__isnull=True)
-        # One query for the whole page: no per-monitor lookups.
-        return Monitor.objects.filter(user=self.request.user).annotate(
-            last_is_up=Subquery(latest.values("is_up")[:1]),
-            down_since=Subquery(open_incident.values("started_at")[:1]),
-            in_maintenance=under_maintenance(timezone.now()),
-            checks_24h=Count("checks", filter=Q(checks__checked_at__gte=since)),
-            up_24h=Count("checks", filter=Q(checks__checked_at__gte=since, checks__is_up=True)),
-        )
+        return dashboard_queryset(self.request.user)
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
