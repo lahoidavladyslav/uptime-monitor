@@ -208,6 +208,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/monitors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a monitor */
+        post: operations["api_routers_monitors_create_monitor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/monitors/{monitor_id}": {
         parameters: {
             query?: never;
@@ -217,9 +234,11 @@ export interface paths {
         };
         /** One monitor with live status */
         get: operations["api_routers_monitors_detail"];
-        put?: never;
+        /** Replace a monitor's configuration */
+        put: operations["api_routers_monitors_update_monitor"];
         post?: never;
-        delete?: never;
+        /** Delete a monitor and its history */
+        delete: operations["api_routers_monitors_delete_monitor"];
         options?: never;
         head?: never;
         patch?: never;
@@ -251,6 +270,23 @@ export interface paths {
         };
         /** Recent checks, paginated */
         get: operations["api_routers_monitors_checks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/monitors/{monitor_id}/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Editable configuration */
+        get: operations["api_routers_monitors_monitor_config"];
         put?: never;
         post?: never;
         delete?: never;
@@ -501,6 +537,68 @@ export interface components {
             /** Timezone */
             timezone: string;
         };
+        /** MonitorConfigOut */
+        MonitorConfigOut: {
+            /**
+             * Expected Status
+             * @default
+             */
+            expected_status: string;
+            /**
+             * Expected Text
+             * @default
+             */
+            expected_text: string;
+            /**
+             * Http Method
+             * @default GET
+             * @enum {string}
+             */
+            http_method: "GET" | "HEAD" | "POST";
+            /** Id */
+            id: number;
+            /**
+             * Interval Seconds
+             * @default 300
+             */
+            interval_seconds: number;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+            /**
+             * Is Public
+             * @default false
+             */
+            is_public: boolean;
+            /** Name */
+            name: string;
+            /**
+             * Public Logo Url
+             * @default
+             */
+            public_logo_url: string;
+            /** Public Slug */
+            public_slug: string | null;
+            /**
+             * Public Title
+             * @default
+             */
+            public_title: string;
+            /**
+             * Request Body
+             * @default
+             */
+            request_body: string;
+            /**
+             * Request Headers
+             * @default
+             */
+            request_headers: string;
+            /** Url */
+            url: string;
+        };
         /** MonitorDetailOut */
         MonitorDetailOut: {
             /** Down Minutes */
@@ -525,6 +623,67 @@ export interface components {
              */
             status: "up" | "down" | "unknown" | "maintenance" | "paused";
             uptime: components["schemas"]["UptimeOut"];
+            /** Url */
+            url: string;
+        };
+        /**
+         * MonitorIn
+         * @description Everything the monitor form edits. Validation is MonitorForm's, so the API and the HTML form agree.
+         */
+        MonitorIn: {
+            /**
+             * Expected Status
+             * @default
+             */
+            expected_status: string;
+            /**
+             * Expected Text
+             * @default
+             */
+            expected_text: string;
+            /**
+             * Http Method
+             * @default GET
+             * @enum {string}
+             */
+            http_method: "GET" | "HEAD" | "POST";
+            /**
+             * Interval Seconds
+             * @default 300
+             */
+            interval_seconds: number;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+            /**
+             * Is Public
+             * @default false
+             */
+            is_public: boolean;
+            /** Name */
+            name: string;
+            /**
+             * Public Logo Url
+             * @default
+             */
+            public_logo_url: string;
+            /**
+             * Public Title
+             * @default
+             */
+            public_title: string;
+            /**
+             * Request Body
+             * @default
+             */
+            request_body: string;
+            /**
+             * Request Headers
+             * @default
+             */
+            request_headers: string;
             /** Url */
             url: string;
         };
@@ -932,6 +1091,30 @@ export interface operations {
             };
         };
     };
+    api_routers_monitors_create_monitor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MonitorIn"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonitorConfigOut"];
+                };
+            };
+        };
+    };
     api_routers_monitors_detail: {
         parameters: {
             query?: never;
@@ -950,6 +1133,54 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MonitorDetailOut"];
+                };
+            };
+        };
+    };
+    api_routers_monitors_update_monitor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitor_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MonitorIn"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonitorConfigOut"];
+                };
+            };
+        };
+    };
+    api_routers_monitors_delete_monitor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitor_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatusOut"];
                 };
             };
         };
@@ -998,6 +1229,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChecksPageOut"];
+                };
+            };
+        };
+    };
+    api_routers_monitors_monitor_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitor_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonitorConfigOut"];
                 };
             };
         };

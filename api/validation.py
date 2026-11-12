@@ -21,3 +21,15 @@ def validate_monitor(user, data: Mapping[str, Any], instance: Monitor | None = N
     if form.is_valid():
         return form.cleaned_data, {}
     return {}, field_errors_from_django(form.errors)
+
+
+def save_monitor(user, data: Mapping[str, Any], instance: Monitor | None = None):
+    """Create or update through the same MonitorForm. Returns (monitor, errors): errors is {} on success and
+    nothing is written on failure."""
+    form = MonitorForm(data, user=user, instance=instance)
+    if not form.is_valid():
+        return None, field_errors_from_django(form.errors)
+    monitor = form.save(commit=False)
+    monitor.user = user
+    monitor.save()  # Monitor.save() generates the public slug once; signals drop the cached public page
+    return monitor, {}

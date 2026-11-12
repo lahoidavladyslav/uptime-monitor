@@ -343,6 +343,96 @@
         "title": "MaintenanceOut",
         "type": "object"
       },
+      "MonitorConfigOut": {
+        "properties": {
+          "expected_status": {
+            "default": "",
+            "title": "Expected Status",
+            "type": "string"
+          },
+          "expected_text": {
+            "default": "",
+            "title": "Expected Text",
+            "type": "string"
+          },
+          "http_method": {
+            "default": "GET",
+            "enum": [
+              "GET",
+              "HEAD",
+              "POST"
+            ],
+            "title": "Http Method",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "interval_seconds": {
+            "default": 300,
+            "title": "Interval Seconds",
+            "type": "integer"
+          },
+          "is_active": {
+            "default": true,
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "is_public": {
+            "default": false,
+            "title": "Is Public",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "public_logo_url": {
+            "default": "",
+            "title": "Public Logo Url",
+            "type": "string"
+          },
+          "public_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Slug"
+          },
+          "public_title": {
+            "default": "",
+            "title": "Public Title",
+            "type": "string"
+          },
+          "request_body": {
+            "default": "",
+            "title": "Request Body",
+            "type": "string"
+          },
+          "request_headers": {
+            "default": "",
+            "title": "Request Headers",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "url",
+          "id",
+          "public_slug"
+        ],
+        "title": "MonitorConfigOut",
+        "type": "object"
+      },
       "MonitorDetailOut": {
         "properties": {
           "down_minutes": {
@@ -435,6 +525,80 @@
           "regions"
         ],
         "title": "MonitorDetailOut",
+        "type": "object"
+      },
+      "MonitorIn": {
+        "description": "Everything the monitor form edits. Validation is MonitorForm's, so the API and the HTML form agree.",
+        "properties": {
+          "expected_status": {
+            "default": "",
+            "title": "Expected Status",
+            "type": "string"
+          },
+          "expected_text": {
+            "default": "",
+            "title": "Expected Text",
+            "type": "string"
+          },
+          "http_method": {
+            "default": "GET",
+            "enum": [
+              "GET",
+              "HEAD",
+              "POST"
+            ],
+            "title": "Http Method",
+            "type": "string"
+          },
+          "interval_seconds": {
+            "default": 300,
+            "title": "Interval Seconds",
+            "type": "integer"
+          },
+          "is_active": {
+            "default": true,
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "is_public": {
+            "default": false,
+            "title": "Is Public",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "public_logo_url": {
+            "default": "",
+            "title": "Public Logo Url",
+            "type": "string"
+          },
+          "public_title": {
+            "default": "",
+            "title": "Public Title",
+            "type": "string"
+          },
+          "request_body": {
+            "default": "",
+            "title": "Request Body",
+            "type": "string"
+          },
+          "request_headers": {
+            "default": "",
+            "title": "Request Headers",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "url"
+        ],
+        "title": "MonitorIn",
         "type": "object"
       },
       "MonitorRowOut": {
@@ -1275,7 +1439,79 @@
         ]
       }
     },
+    "/api/v1/monitors": {
+      "post": {
+        "operationId": "api_routers_monitors_create_monitor",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MonitorIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonitorConfigOut"
+                }
+              }
+            },
+            "description": "Created"
+          }
+        },
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "summary": "Create a monitor",
+        "tags": [
+          "monitors"
+        ]
+      }
+    },
     "/api/v1/monitors/{monitor_id}": {
+      "delete": {
+        "operationId": "api_routers_monitors_delete_monitor",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "title": "Monitor Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusOut"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "summary": "Delete a monitor and its history",
+        "tags": [
+          "monitors"
+        ]
+      },
       "get": {
         "operationId": "api_routers_monitors_detail",
         "parameters": [
@@ -1307,6 +1543,51 @@
           }
         ],
         "summary": "One monitor with live status",
+        "tags": [
+          "monitors"
+        ]
+      },
+      "put": {
+        "operationId": "api_routers_monitors_update_monitor",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "title": "Monitor Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MonitorIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonitorConfigOut"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "summary": "Replace a monitor's configuration",
         "tags": [
           "monitors"
         ]
@@ -1411,6 +1692,43 @@
           }
         ],
         "summary": "Recent checks, paginated",
+        "tags": [
+          "monitors"
+        ]
+      }
+    },
+    "/api/v1/monitors/{monitor_id}/config": {
+      "get": {
+        "operationId": "api_routers_monitors_monitor_config",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "title": "Monitor Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonitorConfigOut"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "summary": "Editable configuration",
         "tags": [
           "monitors"
         ]
