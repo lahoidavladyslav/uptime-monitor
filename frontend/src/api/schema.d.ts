@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/v1/account/login-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recent sign-in activity */
+        get: operations["api_routers_account_login_events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/confirm": {
         parameters: {
             query?: never;
@@ -211,6 +228,22 @@ export interface components {
             /** Email */
             email: string;
         };
+        /** LoginEventOut */
+        LoginEventOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: number;
+            /** Ip */
+            ip: string | null;
+            /** Kind */
+            kind: string;
+            /** User Agent */
+            user_agent: string;
+        };
         /** LoginIn */
         LoginIn: {
             /** Password */
@@ -305,6 +338,26 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    api_routers_account_login_events: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginEventOut"][];
+                };
+            };
+        };
+    };
     api_routers_auth_confirm: {
         parameters: {
             query?: never;

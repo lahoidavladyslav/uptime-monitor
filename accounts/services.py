@@ -10,6 +10,7 @@ from django.contrib.auth import get_user_model, login
 from django.core import signing
 from django.core.mail import send_mail
 
+from .events import record_login_event
 from .models import TOTPDevice
 
 User = get_user_model()
@@ -88,13 +89,15 @@ def finish_two_factor(request, code: str) -> TwoFactorResult:
         return "expired"
     pre["tries"] += 1
     request.session["pre_2fa"] = pre
+    user = User.objects.get(pk=pre["user"])
     if pre["tries"] > MAX_2FA_ATTEMPTS:
         request.session.pop("pre_2fa", None)
+        record_login_event(request, user, "two_factor_locked")
         return "locked"
-    user = User.objects.get(pk=pre["user"])
     device = user.totp_device
     if verify_totp(device, code) or device.use_recovery_code(code):
         request.session.pop("pre_2fa", None)
         login(request, user, backend=BACKEND)
         return "ok"
+    record_login_event(request, user, "two_factor_failed")
     return "invalid"

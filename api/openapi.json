@@ -47,6 +47,47 @@
         "title": "EmailIn",
         "type": "object"
       },
+      "LoginEventOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ip"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "user_agent": {
+            "title": "User Agent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "ip",
+          "user_agent",
+          "created_at"
+        ],
+        "title": "LoginEventOut",
+        "type": "object"
+      },
       "LoginIn": {
         "properties": {
           "password": {
@@ -316,6 +357,37 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/account/login-events": {
+      "get": {
+        "operationId": "api_routers_account_login_events",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LoginEventOut"
+                  },
+                  "title": "Response",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "summary": "Recent sign-in activity",
+        "tags": [
+          "account"
+        ]
+      }
+    },
     "/api/v1/auth/confirm": {
       "post": {
         "operationId": "api_routers_auth_confirm",

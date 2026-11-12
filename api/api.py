@@ -42,8 +42,10 @@ def register_handlers(api: NinjaAPI) -> None:
 api = NinjaAPI(title="Uptime Monitor API", version="1.0", urls_namespace="api")
 register_handlers(api)
 
+from .routers.account import router as account_router  # noqa: E402
 from .routers.auth import router as auth_router  # noqa: E402
 from .routers.dashboard import router as dashboard_router  # noqa: E402
 
 api.add_router("/auth", auth_router, tags=["auth"])
 api.add_router("/dashboard", dashboard_router, tags=["dashboard"])
+api.add_router("/account", account_router, tags=["account"])

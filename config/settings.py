@@ -4,6 +4,8 @@ from pathlib import Path
 import dj_database_url
 from celery.schedules import crontab
 
+from config.observability import build_logging
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # DJANGO_ENV=production turns on strict, fail-fast configuration (see docker-compose.prod.yml).
@@ -32,6 +34,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "config.observability.RequestLogMiddleware",  # outermost: times everything, binds the request id
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -133,6 +136,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "monitors.tasks.schedule_ssl_checks",
         "schedule": crontab(hour=4, minute=0),
     },
+    "cleanup-login-events": {
+        "task": "accounts.tasks.cleanup_login_events",
+        "schedule": crontab(hour=3, minute=30),
+    },
     "cleanup-old-checks": {
         "task": "monitors.tasks.cleanup_old_checks",
         "schedule": crontab(hour=3, minute=0),
@@ -147,6 +154,8 @@ CHECK_TIMEOUT_SECONDS = 10
 CHECK_RETENTION_DAYS = 30
 ROLLUP_RETENTION_DAYS = 400
 CLEANUP_BATCH_SIZE = 5000
+LOGIN_EVENT_RETENTION_DAYS = 90
+LOGIN_EVENTS_SHOWN = 50
 PUBLIC_STATUS_CACHE_SECONDS = 60
 
 # ---------------------------- queues ----------------------------
@@ -199,12 +208,15 @@ if PRODUCTION:
     EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
     EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "1") == "1"
     DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", DEFAULT_FROM_EMAIL)
-    LOGGING = {
-        "version": 1,
-        "disable_existing_loggers": False,
-        "handlers": {"console": {"class": "logging.StreamHandler"}},
-        "root": {"handlers": ["console"], "level": os.environ.get("LOG_LEVEL", "INFO")},
-    }
+
+# ---------------------------- logging ----------------------------
+# JSON lines in production (what log shippers want), readable text in development. LOG_FORMAT overrides.
+LOG_FORMAT = os.environ.get("LOG_FORMAT", "json" if PRODUCTION else "plain")
+LOGGING = build_logging(json_format=LOG_FORMAT == "json", level=os.environ.get("LOG_LEVEL", "INFO"))
+# only nginx (which overwrites X-Real-IP) may tell us who the client is
+TRUST_PROXY_HEADERS = PRODUCTION
+# the Celery worker must not replace our log config with its own
+CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 
 WHITENOISE_USE_FINDERS = DEBUG
 WHITENOISE_AUTOREFRESH = DEBUG

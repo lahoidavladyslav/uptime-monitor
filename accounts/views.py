@@ -18,7 +18,7 @@ from django.views.generic.edit import FormView
 
 from . import services
 from .forms import CodeForm, LoginForm, ResendForm, SignupForm
-from .models import TOTPDevice
+from .models import LoginEvent, TOTPDevice
 
 User = get_user_model()
 
@@ -110,7 +110,8 @@ def _qr_svg(uri):
 @login_required
 def security(request):
     device = TOTPDevice.objects.filter(user=request.user, confirmed=True).first()
-    return render(request, "accounts/security.html", {"device": device})
+    events = LoginEvent.objects.filter(user=request.user)[: settings.LOGIN_EVENTS_SHOWN]
+    return render(request, "accounts/security.html", {"device": device, "events": events})
 
 
 class TwoFactorSetupView(View):
