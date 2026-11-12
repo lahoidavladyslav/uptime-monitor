@@ -27,9 +27,15 @@ services:
     <<: *app
     command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
     ports: ["8000:8000"]
-  worker:
+  worker:          # the check loop
     <<: *app
-    command: celery -A config worker -l info
+    command: celery -A config worker -Q checks -c 4 -n checks@%h -l info
+  worker-notify:   # email
+    <<: *app
+    command: celery -A config worker -Q notifications -c 2 -n notify@%h -l info
+  worker-reports:  # slow CSV exports, isolated from the check loop
+    <<: *app
+    command: celery -A config worker -Q reports -c 1 -O fair -n reports@%h -l info
   beat:
     <<: *app
     command: celery -A config beat -l info

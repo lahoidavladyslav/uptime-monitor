@@ -13,7 +13,7 @@ from django.utils import timezone
 
 from .checks import MAX_BODY_BYTES, evaluate
 from .http_client import guarded_session
-from .models import CheckResult, Incident, MaintenanceWindow, Monitor
+from .models import CheckResult, HourlyStat, Incident, MaintenanceWindow, Monitor
 from .security import blocked_reason
 
 logger = logging.getLogger(__name__)
@@ -231,6 +231,7 @@ def cleanup_old_checks():
             break
         deleted, _ = CheckResult.objects.filter(pk__in=ids).delete()
         total += deleted
+    HourlyStat.objects.filter(hour__lt=timezone.now() - timedelta(days=settings.ROLLUP_RETENTION_DAYS)).delete()
     return total
 
 
@@ -337,3 +338,54 @@ def send_ssl_alert(monitor_id, days_left):
         body = f"Сертифікат сайту «{monitor.name}» ({monitor.url}) діє ще {days_left} дн. Оновіть його."
     send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [monitor.user.email])
     return "sent"
+
+
+# ----------------------------- hourly rollups -----------------------------
+ROLLUP_RECOMPUTE_HOURS = 3  # the current hour is still filling; late rows land in the last few
+
+
+def rollup_range(start, end):
+    """(Re)compute HourlyStat rows for [start, end) in one aggregate query + one upsert.
+
+    Idempotent: running it twice gives the same rows. `start` must be hour-aligned.
+    """
+    from django.db.models import Count, Sum
+    from django.db.models.functions import TruncHour
+
+    rows = (
+        CheckResult.objects.filter(checked_at__gte=start, checked_at__lt=end)
+        .annotate(hour=TruncHour("checked_at"))
+        .values("monitor_id", "hour")
+        .annotate(
+            total=Count("id"),
+            up=Count("id", filter=Q(is_up=True)),
+            rt_sum=Sum("response_time_ms"),
+            rt_count=Count("response_time_ms"),
+        )
+    )
+    stats = [
+        HourlyStat(
+            monitor_id=r["monitor_id"],
+            hour=r["hour"],
+            total=r["total"],
+            up=r["up"],
+            rt_sum=r["rt_sum"] or 0,
+            rt_count=r["rt_count"],
+        )
+        for r in rows
+    ]
+    HourlyStat.objects.bulk_create(
+        stats,
+        batch_size=2000,
+        update_conflicts=True,
+        unique_fields=["monitor", "hour"],
+        update_fields=["total", "up", "rt_sum", "rt_count"],
+    )
+    return len(stats)
+
+
+@shared_task
+def rollup_hourly():
+    end = timezone.now()
+    start = (end - timedelta(hours=ROLLUP_RECOMPUTE_HOURS)).replace(minute=0, second=0, microsecond=0)
+    return rollup_range(start, end)

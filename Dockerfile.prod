@@ -1,0 +1,20 @@
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app
+
+# runtime dependencies only (no pytest/ruff in the production image)
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
+
+COPY . .
+
+# static files are collected at build time and served by WhiteNoise; the build-only env
+# values below never reach the running container
+RUN SECRET_KEY=build-only ALLOWED_HOSTS=build DJANGO_ENV=production python manage.py collectstatic --noinput
+
+# non-root user; /app/media is pre-created so a named volume inherits its ownership
+RUN useradd --system --uid 1001 app && mkdir -p /app/media && chown -R app:app /app/media
+USER app
+
+EXPOSE 8000
+CMD ["sh", "-c", "exec gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers ${WEB_CONCURRENCY:-3} --timeout 30 --access-logfile - --forwarded-allow-ips='*'"]

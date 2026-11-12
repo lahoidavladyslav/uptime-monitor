@@ -16,7 +16,7 @@ from django.views.generic import CreateView, DeleteView, ListView, UpdateView
 
 from .forms import MaintenanceForm, MonitorForm, StatusPageForm
 from .models import CheckResult, Incident, MaintenanceWindow, Monitor, StatusPage
-from .services import PERIODS, monitor_stats, response_time_series, uptime_percent
+from .services import PERIODS, long_term_uptime, monitor_stats, response_time_series, uptime_percent
 from .tasks import check_monitor, check_ssl, under_maintenance
 
 
@@ -146,6 +146,8 @@ class MonitorDetailView(OwnedMonitorMixin, View):
                 "page": page,
                 "incidents": monitor.incidents.all()[:50],
                 "ssl_days_left": _ssl_days_left(monitor),
+                "uptime_30d": long_term_uptime(monitor, 30),
+                "uptime_90d": long_term_uptime(monitor, 90),
                 "windows": monitor.maintenance_windows.filter(ends_at__gt=timezone.now()).order_by("starts_at")[:10],
                 "maintenance_form": MaintenanceForm(),
                 "in_maintenance": monitor.maintenance_windows.filter(

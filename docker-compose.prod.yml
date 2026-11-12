@@ -1,0 +1,74 @@
+# Production-style stack:
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile.prod
+  env_file: .env.prod
+  environment:
+    DJANGO_ENV: production
+  restart: unless-stopped
+  depends_on:
+    migrate: {condition: service_completed_successfully}
+
+services:
+  db:
+    image: postgres:16
+    env_file: .env.prod
+    volumes: [pgdata:/var/lib/postgresql/data]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      retries: 20
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    restart: unless-stopped
+
+  migrate:   # one-shot: apply migrations before anything else starts
+    <<: *app
+    depends_on:
+      db: {condition: service_healthy}
+    restart: "no"
+    command: python manage.py migrate --noinput
+
+  web:
+    <<: *app
+    volumes: [media:/app/media]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz/', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      retries: 6
+      start_period: 10s
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports: ["${HTTP_PORT:-80}:80"]
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/proxy_common.conf:/etc/nginx/proxy_common.conf:ro
+    depends_on:
+      web: {condition: service_healthy}
+    restart: unless-stopped
+
+  # One worker pool per queue: a long report can never delay the check loop.
+  worker-checks:
+    <<: *app
+    command: celery -A config worker -Q checks -c ${CHECKS_CONCURRENCY:-4} -n checks@%h -l info
+  worker-notify:
+    <<: *app
+    command: celery -A config worker -Q notifications -c 2 -n notify@%h -l info
+  worker-reports:
+    <<: *app
+    volumes: [media:/app/media]
+    command: celery -A config worker -Q reports -c 1 -O fair -n reports@%h -l info
+  beat:
+    <<: *app
+    command: celery -A config beat -l info -s /tmp/celerybeat-schedule
+
+volumes:
+  pgdata:
+  redisdata:
+  media:

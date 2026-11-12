@@ -59,6 +59,9 @@
     <a class="btn btn-sm {% if period == '24h' %}btn-dark{% else %}btn-outline-dark{% endif %}" href="?period=24h">24 години</a>
     <a class="btn btn-sm {% if period == '7d' %}btn-dark{% else %}btn-outline-dark{% endif %}" href="?period=7d">7 днів</a>
   </div>
+  <div class="small text-muted mb-2">Довгостроковий uptime (за погодинними агрегатами):
+    30 днів — <strong>{% if uptime_30d is None %}—{% else %}{{ uptime_30d }}%{% endif %}</strong>,
+    90 днів — <strong>{% if uptime_90d is None %}—{% else %}{{ uptime_90d }}%{% endif %}</strong></div>
   {% if stats.total == 0 %}
     <p class="text-muted m-0">немає даних</p>
   {% else %}

@@ -6,9 +6,17 @@ from celery.schedules import crontab
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-insecure-key-change-me")
-DEBUG = os.environ.get("DEBUG", "1") == "1"
-ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "*").split(",")
+# DJANGO_ENV=production turns on strict, fail-fast configuration (see docker-compose.prod.yml).
+PRODUCTION = os.environ.get("DJANGO_ENV") == "production"
+DEBUG = not PRODUCTION and os.environ.get("DEBUG", "1") == "1"
+
+if PRODUCTION:
+    # No insecure fallbacks in production: refuse to start instead of running unsafely.
+    SECRET_KEY = os.environ["SECRET_KEY"]
+    ALLOWED_HOSTS = [h for h in os.environ["ALLOWED_HOSTS"].split(",") if h]
+else:
+    SECRET_KEY = os.environ.get("SECRET_KEY", "dev-insecure-key-change-me")
+    ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "*").split(",")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -24,6 +32,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -71,6 +80,15 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"
+        if PRODUCTION
+        else "django.contrib.staticfiles.storage.StaticFilesStorage"
+    },
+}
 MEDIA_URL = "media/"
 MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", BASE_DIR / "media"))
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -86,7 +104,7 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": REDIS_URL,
+        "LOCATION": os.environ.get("CACHE_REDIS_URL", REDIS_URL),
     }
 }
 
@@ -98,6 +116,10 @@ CELERY_BEAT_SCHEDULE = {
     "schedule-checks": {
         "task": "monitors.tasks.schedule_checks",
         "schedule": 60.0,
+    },
+    "rollup-hourly": {
+        "task": "monitors.tasks.rollup_hourly",
+        "schedule": crontab(minute=5),
     },
     "ssl-expiry-checks": {
         "task": "monitors.tasks.schedule_ssl_checks",
@@ -115,5 +137,66 @@ CHECK_NOW_COOLDOWN_SECONDS = 10
 MAX_IN_PROGRESS_REPORTS = 3
 CHECK_TIMEOUT_SECONDS = 10
 CHECK_RETENTION_DAYS = 30
+ROLLUP_RETENTION_DAYS = 400
 CLEANUP_BATCH_SIZE = 5000
 PUBLIC_STATUS_CACHE_SECONDS = 60
+
+# ---------------------------- queues ----------------------------
+# Slow report generation, mail and the check loop must not starve each other.
+CELERY_TASK_DEFAULT_QUEUE = "checks"
+CELERY_TASK_ROUTES = {
+    "monitors.tasks.send_incident_notification": {"queue": "notifications"},
+    "monitors.tasks.send_ssl_alert": {"queue": "notifications"},
+    "reports.tasks.generate_report": {"queue": "reports"},
+}
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # don't let one worker hoard long jobs
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+
+# ---------------------------- observability ----------------------------
+METRICS_TOKEN = os.environ.get("METRICS_TOKEN", "")  # empty -> /metrics is disabled (404)
+SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
+if SENTRY_DSN:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment="production" if PRODUCTION else "development",
+        traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0")),
+        send_default_pii=False,  # no emails/IPs/cookies in error reports
+    )
+
+# ---------------------------- production hardening ----------------------------
+if PRODUCTION:
+    HTTPS = os.environ.get("HTTPS", "1") == "1"  # TLS is terminated in front of nginx
+    CSRF_TRUSTED_ORIGINS = [o for o in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(",") if o]
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SESSION_COOKIE_SECURE = CSRF_COOKIE_SECURE = HTTPS
+    # nginx/the load balancer terminates TLS and sets X-Forwarded-Proto; Django enforces the redirect.
+    # /healthz/ is exempt because orchestrator probes arrive over plain HTTP inside the network.
+    SECURE_SSL_REDIRECT = HTTPS
+    SECURE_REDIRECT_EXEMPT = [r"^healthz/$"]
+    SECURE_HSTS_SECONDS = 31536000 if HTTPS else 0
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = HTTPS
+    # Preload is effectively irreversible, so it is opt-in (HSTS_PRELOAD=1), not a default.
+    SECURE_HSTS_PRELOAD = HTTPS and os.environ.get("HSTS_PRELOAD") == "1"
+    if not SECURE_HSTS_PRELOAD:
+        SILENCED_SYSTEM_CHECKS = ["security.W021"]
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_REFERRER_POLICY = "same-origin"
+    X_FRAME_OPTIONS = "DENY"
+    EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+    EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")
+    EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+    EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+    EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+    EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "1") == "1"
+    DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", DEFAULT_FROM_EMAIL)
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "handlers": {"console": {"class": "logging.StreamHandler"}},
+        "root": {"handlers": ["console"], "level": os.environ.get("LOG_LEVEL", "INFO")},
+    }
+
+WHITENOISE_USE_FINDERS = DEBUG
+WHITENOISE_AUTOREFRESH = DEBUG
