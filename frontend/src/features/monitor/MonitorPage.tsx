@@ -96,6 +96,9 @@ function MonitorView({ id }: { id: number }) {
           </div>
         </div>
         <div className="flex flex-col items-start gap-1 sm:items-end">
+          <Link to={`/monitors/${id}/edit`} className={cn(buttonVariants({ variant: "outline" }))}>
+            {t.monitor.edit}
+          </Link>
           <Button
             onClick={() => {
               setResting(true);
