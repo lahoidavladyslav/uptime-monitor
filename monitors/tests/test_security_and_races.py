@@ -141,7 +141,7 @@ def test_monitor_deleted_mid_request_is_handled(monitor, monkeypatch):
 
 def test_check_now_cooldown(auth_client, monitor, monkeypatch):
     calls = []
-    monkeypatch.setattr("monitors.views.check_monitor.delay", lambda pk, **kw: calls.append(pk))
+    monkeypatch.setattr("monitors.views.enqueue_checks", lambda pk, **kw: calls.append(pk))
     url = reverse("monitor_check", args=[monitor.pk])
     auth_client.post(url)
     r = auth_client.post(url, follow=True)

@@ -8,10 +8,10 @@ from django.utils import timezone
 from ninja import Query, Router, Schema
 from ninja import Status as HttpStatus
 
-from monitors import services
+from monitors import regions, services
 from monitors.forms import MaintenanceForm
 from monitors.models import MaintenanceWindow
-from monitors.tasks import check_monitor, check_ssl
+from monitors.tasks import check_ssl, enqueue_checks
 
 from ..deps import session_auth
 from ..errors import ApiError, field_errors_from_django
@@ -40,6 +40,12 @@ class UptimeOut(Schema):
     d90: float | None
 
 
+class RegionOut(Schema):
+    region: str
+    status: Literal["up", "down", "stale", "unknown"]  # stale = the region has gone silent
+    last_checked_at: datetime | None
+
+
 class MonitorDetailOut(Schema):
     id: int
     name: str
@@ -51,6 +57,7 @@ class MonitorDetailOut(Schema):
     ssl_error: str
     down_minutes: int | None
     uptime: UptimeOut
+    regions: list[RegionOut]
 
 
 class StatsOut(Schema):
@@ -127,6 +134,7 @@ def detail(request, monitor_id: int):
             "d30": windows[30],
             "d90": windows[90],
         },
+        "regions": regions.region_status(m),
     }
 
 
@@ -200,7 +208,7 @@ def check_now(request, monitor_id: int):
         raise ApiError(429, "Зачекайте кілька секунд перед наступною перевіркою.")
     if monitor.in_maintenance:
         raise ApiError(409, "Монітор зараз на обслуговуванні — перевірки призупинено.")
-    check_monitor.delay(monitor.pk, force=True)
+    enqueue_checks(monitor.pk, force=True)
     if monitor.url.lower().startswith("https://"):
         check_ssl.delay(monitor.pk)
     return HttpStatus(202, {"status": "queued"})

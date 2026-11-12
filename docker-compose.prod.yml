@@ -5,7 +5,7 @@ x-app: &app
     context: .
     dockerfile: Dockerfile.prod
   env_file: .env.prod
-  environment:
+  environment: &env
     DJANGO_ENV: production
   restart: unless-stopped
   depends_on:
@@ -57,6 +57,19 @@ services:
   worker-checks:
     <<: *app
     command: celery -A config worker -Q checks -c ${CHECKS_CONCURRENCY:-4} -n checks@%h -l info
+  # One check worker per region (queue checks.<region>); an incident needs a quorum of them (README, H4).
+  worker-eu:
+    <<: *app
+    environment: {<<: *env, CHECK_REGION: eu}
+    command: celery -A config worker -Q checks.eu -c ${CHECKS_CONCURRENCY:-4} -n eu@%h -l info
+  worker-us:
+    <<: *app
+    environment: {<<: *env, CHECK_REGION: us}
+    command: celery -A config worker -Q checks.us -c ${CHECKS_CONCURRENCY:-4} -n us@%h -l info
+  worker-asia:
+    <<: *app
+    environment: {<<: *env, CHECK_REGION: asia}
+    command: celery -A config worker -Q checks.asia -c ${CHECKS_CONCURRENCY:-4} -n asia@%h -l info
   worker-notify:
     <<: *app
     command: celery -A config worker -Q notifications -c 2 -n notify@%h -l info

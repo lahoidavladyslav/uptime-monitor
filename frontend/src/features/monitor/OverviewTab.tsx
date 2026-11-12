@@ -75,6 +75,29 @@ export function OverviewTab({ monitor }: { monitor: Monitor }) {
         </div>
       )}
 
+      {monitor.regions.length > 1 && (
+        <section aria-labelledby="regions-title" className="rounded-lg border border-border bg-card p-4">
+          <h2 id="regions-title" className="text-sm font-medium text-muted-foreground">
+            {t.monitor.regions.title}
+          </h2>
+          <ul className="mt-2 flex flex-wrap gap-2">
+            {monitor.regions.map((r) => (
+              <li key={r.region} data-region={r.region} data-status={r.status} className="flex items-center gap-2 rounded-full border border-border px-3 py-1 text-sm">
+                <span className="font-medium uppercase">{r.region}</span>
+                <span className={cn(r.status === "up" && "text-status-up", r.status === "down" && "text-status-down", (r.status === "stale" || r.status === "unknown") && "text-muted-foreground")}>
+                  {r.status === "up" ? "✓ " : r.status === "down" ? "✕ " : "– "}
+                  {t.monitor.regions[r.status]}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {t.monitor.regions.quorum}
+            {monitor.regions.some((r) => r.status === "stale") && ` ${t.monitor.regions.staleHint}`}
+          </p>
+        </section>
+      )}
+
       <section aria-labelledby="ssl-title" className="rounded-lg border border-border bg-card p-4">
         <h2 id="ssl-title" className="text-sm font-medium text-muted-foreground">
           {t.monitor.ssl}

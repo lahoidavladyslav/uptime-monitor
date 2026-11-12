@@ -41,9 +41,21 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
-  worker:          # the check loop
+  worker:          # scheduling, SSL, rollups, housekeeping (no region: the per-region workers below run the checks)
     <<: *app
-    command: celery -A config worker -Q checks -c 4 -n checks@%h -l info
+    command: celery -A config worker -Q checks -c 2 -n checks@%h -l info
+  worker-eu:       # one check worker per region: its own queue, its own CHECK_REGION
+    <<: *app
+    environment: {<<: *env, CHECK_REGION: eu}
+    command: celery -A config worker -Q checks.eu -c 4 -n eu@%h -l info
+  worker-us:
+    <<: *app
+    environment: {<<: *env, CHECK_REGION: us}
+    command: celery -A config worker -Q checks.us -c 4 -n us@%h -l info
+  worker-asia:
+    <<: *app
+    environment: {<<: *env, CHECK_REGION: asia}
+    command: celery -A config worker -Q checks.asia -c 4 -n asia@%h -l info
   worker-notify:   # email
     <<: *app
     command: celery -A config worker -Q notifications -c 2 -n notify@%h -l info

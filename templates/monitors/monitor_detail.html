@@ -26,6 +26,17 @@
       {% if monitor.expected_text %}<div>Має містити: <code>{{ monitor.expected_text }}</code></div>{% endif %}
       {% if monitor.request_headers %}<div>Заголовків: {{ monitor.request_headers|length }}</div>{% endif %}
     </div>
+    {% if region_rows|length > 1 %}
+    <hr class="my-2">
+    <div class="small">Регіони:
+      {% for r in region_rows %}
+        <span class="me-2" title="{% if r.last_checked_at %}остання відповідь {{ r.last_checked_at|date:'H:i:s' }} UTC{% endif %}">
+          {% if r.status == "up" %}🟢{% elif r.status == "down" %}🔴{% elif r.status == "stale" %}⚪{% else %}…{% endif %}
+          {{ r.region }}{% if r.status == "stale" %} <span class="text-muted">(немає даних — регіон мовчить, не враховується)</span>{% elif r.status == "unknown" %} <span class="text-muted">(ще не відповідав)</span>{% endif %}
+        </span>
+      {% endfor %}
+    </div>
+    {% endif %}
     {% if monitor.url|slice:":5" == "https" %}
     <hr class="my-2">
     <div class="small">SSL:

@@ -350,6 +350,13 @@
             "title": "Name",
             "type": "string"
           },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/RegionOut"
+            },
+            "title": "Regions",
+            "type": "array"
+          },
           "ssl_days_left": {
             "anyOf": [
               {
@@ -394,7 +401,8 @@
           "ssl_days_left",
           "ssl_error",
           "down_minutes",
-          "uptime"
+          "uptime",
+          "regions"
         ],
         "title": "MonitorDetailOut",
         "type": "object"
@@ -479,6 +487,43 @@
           "spark"
         ],
         "title": "MonitorRowOut",
+        "type": "object"
+      },
+      "RegionOut": {
+        "properties": {
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "region": {
+            "title": "Region",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "up",
+              "down",
+              "stale",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "region",
+          "status",
+          "last_checked_at"
+        ],
+        "title": "RegionOut",
         "type": "object"
       },
       "ResetConfirmIn": {

@@ -492,6 +492,8 @@ export interface components {
             last_checked_at: string | null;
             /** Name */
             name: string;
+            /** Regions */
+            regions: components["schemas"]["RegionOut"][];
             /** Ssl Days Left */
             ssl_days_left: number | null;
             /** Ssl Error */
@@ -524,6 +526,18 @@ export interface components {
             status: "up" | "down" | "unknown" | "maintenance" | "paused";
             /** Uptime 24H */
             uptime_24h: number | null;
+        };
+        /** RegionOut */
+        RegionOut: {
+            /** Last Checked At */
+            last_checked_at: string | null;
+            /** Region */
+            region: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "up" | "down" | "stale" | "unknown";
         };
         /** ResetConfirmIn */
         ResetConfirmIn: {

@@ -168,7 +168,7 @@ def test_read_endpoints_use_a_constant_number_of_queries(auth_client, mon, djang
 def queued(monkeypatch):
     calls = {"check": [], "ssl": []}
     monkeypatch.setattr(
-        "api.routers.monitors.check_monitor.delay", lambda pk, force=False: calls["check"].append((pk, force))
+        "api.routers.monitors.enqueue_checks", lambda pk, force=False: calls["check"].append((pk, force))
     )
     monkeypatch.setattr("api.routers.monitors.check_ssl.delay", lambda pk: calls["ssl"].append(pk))
     return calls

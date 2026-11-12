@@ -18,6 +18,11 @@ const detail = (over = {}) => ({
   ssl_error: "",
   down_minutes: null,
   uptime: { h24: 99.95, d7: 98.5, d30: 97, d90: null },
+  regions: [
+    { region: "eu", status: "up", last_checked_at: new Date().toISOString() },
+    { region: "us", status: "down", last_checked_at: new Date().toISOString() },
+    { region: "asia", status: "stale", last_checked_at: null },
+  ],
   ...over,
 });
 const stats = (over = {}) => ({ total: 100, up: 99, down: 1, uptime: 99, rt_avg: 120, rt_min: 80, rt_max: 400, ...over });
@@ -89,6 +94,23 @@ describe("monitor page: header and overview", () => {
     expect(await screen.findByText("120 мс")).toBeInTheDocument(); // average
     expect(screen.getByText(/45 дн/)).toBeInTheDocument();
     expect(await screen.findByRole("img", { name: /Час відповіді/ })).toBeInTheDocument();
+  });
+
+  it("shows what every region sees, and calls out a silent one instead of hiding it", async () => {
+    mockApi();
+    renderApp("/monitors/7");
+    const section = (await screen.findByRole("heading", { name: "Регіони" })).closest("section")!;
+    expect(within(section).getByText(/Працює/).closest("li")).toHaveAttribute("data-region", "eu");
+    expect(within(section).getByText(/Недоступний/).closest("li")).toHaveAttribute("data-region", "us");
+    expect(within(section).getByText(/Немає даних/).closest("li")).toHaveAttribute("data-region", "asia");
+    expect(within(section).getByText(/Регіон мовчить і не враховується/)).toBeInTheDocument();
+  });
+
+  it("a single-region deployment shows no region card", async () => {
+    mockApi({ detail: { regions: [{ region: "eu", status: "up", last_checked_at: null }] } });
+    renderApp("/monitors/7");
+    await screen.findByRole("heading", { name: "Мій сайт" });
+    expect(screen.queryByRole("heading", { name: "Регіони" })).not.toBeInTheDocument();
   });
 
   it("a down monitor shows how long it has been down", async () => {

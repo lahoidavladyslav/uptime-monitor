@@ -13,6 +13,7 @@ from django.views.generic import CreateView, DeleteView, ListView, UpdateView
 from .formkit import FormErrorMessageMixin
 from .forms import MaintenanceForm, MonitorForm, StatusPageForm
 from .models import MaintenanceWindow, Monitor, StatusPage
+from .regions import region_status
 from .services import (
     PERIODS,
     cooldown_ok,
@@ -23,7 +24,7 @@ from .services import (
     uptime_percent,
     uptime_windows,
 )
-from .tasks import check_monitor, check_ssl
+from .tasks import check_ssl, enqueue_checks
 
 
 class OwnedMonitorMixin(LoginRequiredMixin):
@@ -137,6 +138,7 @@ class MonitorDetailView(OwnedMonitorMixin, View):
                 "page": page,
                 "incidents": monitor.incidents.all()[:50],
                 "ssl_days_left": ssl_days_left(monitor),
+                "region_rows": region_status(monitor),
                 "uptime_30d": windows[30],
                 "uptime_90d": windows[90],
                 "windows": monitor.maintenance_windows.filter(ends_at__gt=timezone.now()).order_by("starts_at")[:10],
@@ -157,7 +159,7 @@ class CheckNowView(OwnedMonitorMixin, View):
         if monitor.maintenance_windows.filter(starts_at__lte=timezone.now(), ends_at__gt=timezone.now()).exists():
             messages.warning(request, "Монітор зараз на обслуговуванні — перевірки призупинено.")
             return redirect("monitor_detail", pk=monitor.pk)
-        check_monitor.delay(monitor.pk, force=True)
+        enqueue_checks(monitor.pk, force=True)
         if monitor.url.lower().startswith("https://"):
             check_ssl.delay(monitor.pk)
         messages.success(request, "Перевірку запущено")

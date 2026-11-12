@@ -12,7 +12,7 @@ from django.db.models import DateTimeField, DurationField, Exists, ExpressionWra
 from django.urls import reverse
 from django.utils import timezone
 
-from . import rollups, subscriptions, webhooks
+from . import regions, rollups, subscriptions, webhooks
 from .checks import MAX_BODY_BYTES, evaluate
 from .http_client import guarded_session
 from .models import (
@@ -21,6 +21,7 @@ from .models import (
     Incident,
     MaintenanceWindow,
     Monitor,
+    MonitorRegion,
     OutboxEvent,
     Subscriber,
 )
@@ -55,11 +56,19 @@ def due_monitors(now=None):
     )
 
 
+def enqueue_checks(monitor_id, force=False):
+    """One task per region, each on that region's own queue (`checks.<region>`)."""
+    for region in settings.CHECK_REGIONS:
+        check_monitor.apply_async(
+            args=[monitor_id], kwargs={"force": force, "region": region}, queue=f"checks.{region}"
+        )
+
+
 @shared_task
 def schedule_checks():
     ids = list(due_monitors().values_list("pk", flat=True))
     for monitor_id in ids:
-        check_monitor.delay(monitor_id)
+        enqueue_checks(monitor_id)
     return len(ids)
 
 
@@ -110,26 +119,24 @@ def perform_http_check(url, *, method="GET", headers=None, body="", expected_sta
 
 
 def update_incident(monitor, result):
-    """Open on up->down, close on down->up, otherwise do nothing (no spam).
+    """Open on up->down, close on down->up, otherwise do nothing (no spam)."""
+    set_incident_state(monitor, result.is_up, result.checked_at, result.error)
 
-    Runs inside the monitor row lock, so two workers can't both open one;
-    the partial UniqueConstraint is the last line of defence.
-    """
+
+def set_incident_state(monitor, is_up, at, error):
+    """Apply a verdict to the monitor's incident. Runs inside the monitor row lock, so two workers can't both
+    open one; the partial UniqueConstraint is the last line of defence."""
     open_incident = Incident.objects.filter(monitor=monitor, resolved_at__isnull=True).first()
-    if not result.is_up and open_incident is None:
+    if not is_up and open_incident is None:
         try:
             with transaction.atomic():
-                incident = Incident.objects.create(
-                    monitor=monitor,
-                    started_at=result.checked_at,
-                    first_error=result.error or "",
-                )
+                incident = Incident.objects.create(monitor=monitor, started_at=at, first_error=error or "")
         except IntegrityError:
             return
         webhooks.enqueue_incident_event(monitor, incident, "incident.opened")  # same transaction as the incident
         transaction.on_commit(lambda: _notify_everyone(incident.pk, "opened"))
-    elif result.is_up and open_incident is not None:
-        open_incident.resolved_at = result.checked_at
+    elif is_up and open_incident is not None:
+        open_incident.resolved_at = at
         open_incident.save(update_fields=["resolved_at"])
         incident_id = open_incident.pk
         webhooks.enqueue_incident_event(monitor, open_incident, "incident.resolved")
@@ -142,31 +149,47 @@ def _notify_everyone(incident_id, kind):
     notify_subscribers.delay(incident_id, kind)
 
 
-def claim_monitor(monitor_id, force):
-    """Atomically mark the monitor as "being checked now". True if *we* own this run.
+def claim_monitor(monitor_id, force, region=None):
+    """Atomically mark the monitor as "being checked now" BY THIS REGION. True if *we* own this run.
 
-    A single conditional UPDATE: Postgres serialises concurrent updates of the
-    row and re-evaluates the WHERE clause, so of N duplicate tasks exactly one
-    sees the monitor as due and wins. No lock is held afterwards, so the slow
-    HTTP request below runs outside any transaction.
+    A single conditional UPDATE on the (monitor, region) clock: Postgres serialises concurrent updates of the
+    row and re-evaluates the WHERE clause, so of N duplicate tasks of one region exactly one sees the check as
+    due and wins, while the other regions (their own clock rows) run independently. No lock is held afterwards,
+    so the slow HTTP request below runs outside any transaction.
     """
+    region = region or regions.default_region()
     now = timezone.now()
-    qs = Monitor.objects.filter(pk=monitor_id, is_active=True).exclude(under_maintenance(now))
+    monitor = (
+        Monitor.objects.filter(pk=monitor_id, is_active=True)
+        .exclude(under_maintenance(now))
+        .values("interval_seconds")
+        .first()
+    )
+    if monitor is None:
+        return False, now
+    MonitorRegion.objects.bulk_create([MonitorRegion(monitor_id=monitor_id, region=region)], ignore_conflicts=True)
+    clock = MonitorRegion.objects.filter(monitor_id=monitor_id, region=region)
     if not force:
-        qs = qs.filter(pk__in=due_monitors(now).values("pk"))
-    # queryset.update(): no post_save, so the public-page cache isn't dropped by every check.
-    return qs.update(last_checked_at=now) == 1, now
+        due_before = now - timedelta(seconds=monitor["interval_seconds"]) + DUE_SLACK
+        clock = clock.filter(Q(last_checked_at__isnull=True) | Q(last_checked_at__lte=due_before))
+    if clock.update(last_checked_at=now) != 1:
+        return False, now
+    # queryset.update(): no post_save, so the public-page cache isn't dropped by every check. The monitor-level
+    # clock is what the scheduler and the dashboard read.
+    Monitor.objects.filter(pk=monitor_id).update(last_checked_at=now)
+    return True, now
 
 
 @shared_task
-def check_monitor(monitor_id, force=False):
+def check_monitor(monitor_id, force=False, region=None):
     """Claim (short) -> HTTP (no transaction) -> record (short, row-locked).
 
-    Duplicates: a second task for the same monitor fails the claim and exits.
-    Crash after claim: that interval's check is lost, the next one runs on
+    Duplicates: a second task for the same monitor AND region fails the claim and exits.
+    Crash after claim: that interval's check is lost for that region, the next one runs on
     schedule (trade-off: at-most-once per interval instead of a held lock).
     """
-    claimed, started_at = claim_monitor(monitor_id, force)
+    region = region or regions.default_region()
+    claimed, started_at = claim_monitor(monitor_id, force, region)
     if not claimed:
         return "skipped"
 
@@ -185,21 +208,31 @@ def check_monitor(monitor_id, force=False):
         expected_status=cfg["expected_status"],
         expected_text=cfg["expected_text"],
     )
+    return record_check(monitor_id, region, started_at, status_code, elapsed, is_up, error)
 
+
+def record_check(monitor_id, region, checked_at, status_code, elapsed, is_up, error):
+    """Write one region's result and let the quorum decide about the incident.
+
+    The monitor row lock serialises everything that can change incident state, so regions reporting at the
+    same moment are evaluated one after the other, each seeing the other's committed result.
+    """
     with transaction.atomic():
-        # Short lock, only for writing: serialises incident open/close per monitor.
         monitor = Monitor.objects.select_for_update(of=("self",)).filter(pk=monitor_id).first()
         if monitor is None:  # deleted while we were doing the request
             return "skipped"
         result = CheckResult.objects.create(
             monitor=monitor,
-            checked_at=started_at,
+            region=region,
+            checked_at=checked_at,
             status_code=status_code,
             response_time_ms=elapsed,
             is_up=is_up,
             error=error,
         )
-        update_incident(monitor, result)
+        verdict = regions.decide(monitor, result)
+        if verdict is not None:
+            set_incident_state(monitor, verdict, checked_at, error if not verdict else None)
     return "up" if is_up else "down"
 
 

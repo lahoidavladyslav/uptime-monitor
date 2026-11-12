@@ -191,7 +191,7 @@ def test_no_check_runs_during_maintenance_even_when_forced(monitor):
 
 def test_check_now_button_explains_maintenance(auth_client, monitor, monkeypatch):
     calls = []
-    monkeypatch.setattr("monitors.views.check_monitor.delay", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr("monitors.views.enqueue_checks", lambda *a, **k: calls.append(a))
     window(monitor)
     r = auth_client.post(reverse("monitor_check", args=[monitor.pk]), follow=True)
     assert calls == [] and "на обслуговуванні" in r.content.decode()

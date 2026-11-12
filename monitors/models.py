@@ -82,17 +82,32 @@ class CheckResult(models.Model):
     response_time_ms = models.PositiveIntegerField(null=True, blank=True)
     is_up = models.BooleanField()
     error = models.TextField(null=True, blank=True)
+    region = models.CharField(max_length=16, default="eu")  # which region's worker made the request
 
     class Meta:
         ordering = ["-checked_at", "-id"]
         indexes = [
             models.Index(fields=["monitor", "checked_at"], name="check_monitor_time_idx"),
+            # "latest result of each region" (quorum, per-region status) is DISTINCT ON (region) over this
+            models.Index(fields=["monitor", "region", "checked_at"], name="check_monitor_region_time_idx"),
             # the daily cleanup filters on checked_at alone
             models.Index(fields=["checked_at"], name="check_time_idx"),
         ]
 
     def __str__(self):
         return f"{self.monitor_id} @ {self.checked_at:%Y-%m-%d %H:%M} {'up' if self.is_up else 'down'}"
+
+
+class MonitorRegion(models.Model):
+    """Per-(monitor, region) schedule clock: the atomic claim that stops a duplicate task of the SAME
+    region while the other regions still run their own check."""
+
+    monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE, related_name="region_clocks")
+    region = models.CharField(max_length=16)
+    last_checked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["monitor", "region"], name="uniq_monitor_region")]
 
 
 class Incident(models.Model):

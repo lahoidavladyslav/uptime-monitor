@@ -175,6 +175,10 @@ CELERY_BEAT_SCHEDULE = {
 }
 
 # Uptime-monitor knobs
+# Checks run from every region in CHECK_REGIONS (one worker per region, queue `checks.<region>`); an incident
+# needs a quorum of them. CHECK_REGION is the region of THIS worker process.
+CHECK_REGIONS = [r.strip() for r in os.environ.get("CHECK_REGIONS", "eu,us,asia").split(",") if r.strip()]
+CHECK_REGION = os.environ.get("CHECK_REGION", "")
 ALLOW_PRIVATE_TARGETS = os.environ.get("ALLOW_PRIVATE_TARGETS", "0") == "1"
 CHECK_NOW_COOLDOWN_SECONDS = 10
 MAX_IN_PROGRESS_REPORTS = 3

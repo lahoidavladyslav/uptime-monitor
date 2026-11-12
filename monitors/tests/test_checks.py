@@ -69,7 +69,7 @@ def test_schedule_checks_picks_only_due_monitors(user, monkeypatch):
     inactive = mk("off", is_active=False)
 
     queued = []
-    monkeypatch.setattr("monitors.tasks.check_monitor.delay", lambda pk, **kw: queued.append(pk))
+    monkeypatch.setattr("monitors.tasks.enqueue_checks", lambda pk, **kw: queued.append(pk))
     assert schedule_checks() == 2
     assert set(queued) == {never.pk, due.pk}
     assert not {fresh.pk, long_ago_15m.pk, inactive.pk} & set(queued)
@@ -77,7 +77,7 @@ def test_schedule_checks_picks_only_due_monitors(user, monkeypatch):
 
 def test_schedule_checks_respects_time(user, monkeypatch):
     queued = []
-    monkeypatch.setattr("monitors.tasks.check_monitor.delay", lambda pk, **kw: queued.append(pk))
+    monkeypatch.setattr("monitors.tasks.enqueue_checks", lambda pk, **kw: queued.append(pk))
     t0 = timezone.now()
     Monitor.objects.create(user=user, name="a", url="https://a.com", interval_seconds=60, last_checked_at=t0)
     with time_machine.travel(t0 + timedelta(seconds=30), tick=False):
@@ -115,7 +115,7 @@ def test_cleanup_deletes_old_in_batches(monitor, settings):
 
 def test_check_now_button_queues_and_flashes(auth_client, monitor, monkeypatch):
     calls = []
-    monkeypatch.setattr("monitors.views.check_monitor.delay", lambda pk, **kw: calls.append((pk, kw)))
+    monkeypatch.setattr("monitors.views.enqueue_checks", lambda pk, **kw: calls.append((pk, kw)))
     r = auth_client.post(f"/monitors/{monitor.pk}/check/", follow=True)
     assert calls == [(monitor.pk, {"force": True})]
     assert "Перевірку запущено" in r.content.decode()
