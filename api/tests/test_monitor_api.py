@@ -196,11 +196,11 @@ def test_a_second_click_inside_the_cooldown_is_429_and_queues_nothing(auth_clien
     assert r.status_code == 429 and r.json()["message"] and len(queued["check"]) == 1
 
 
-def test_check_now_during_maintenance_is_409(auth_client, mon, queued):
+def test_check_now_during_maintenance_still_queues_the_checks(auth_client, mon, queued):
     now = timezone.now()
     MaintenanceWindow.objects.create(monitor=mon, starts_at=now - timedelta(hours=1), ends_at=now + timedelta(hours=1))
     r = post(auth_client, f"/{mon.pk}/check")
-    assert r.status_code == 409 and queued["check"] == []
+    assert r.status_code == 202 and queued["check"] == [(mon.pk, True)]  # they run, flagged, opening no incident
 
 
 def test_check_now_on_a_foreign_monitor_is_404_and_queues_nothing(auth_client, foreign, queued):

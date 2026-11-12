@@ -25,7 +25,7 @@ def monitor_stats(monitor, period="24h"):
     now = timezone.now()
     if period == "24h":
         since = now - PERIODS[period]
-        agg = monitor.checks.filter(checked_at__gte=since).aggregate(
+        agg = monitor.checks.filter(checked_at__gte=since, in_maintenance=False).aggregate(
             total=Count("id"),
             up=Count("id", filter=Q(is_up=True)),
             down=Count("id", filter=Q(is_up=False)),
@@ -164,8 +164,11 @@ def dashboard_queryset(user, now=None):
         last_is_up=Subquery(latest.values("is_up")[:1]),
         down_since=Subquery(open_incident.values("started_at")[:1]),
         in_maintenance=under_maintenance(now),
-        checks_24h=Count("checks", filter=Q(checks__checked_at__gte=since)),
-        up_24h=Count("checks", filter=Q(checks__checked_at__gte=since, checks__is_up=True)),
+        # samples taken during maintenance count towards neither side of the uptime ratio
+        checks_24h=Count("checks", filter=Q(checks__checked_at__gte=since, checks__in_maintenance=False)),
+        up_24h=Count(
+            "checks", filter=Q(checks__checked_at__gte=since, checks__is_up=True, checks__in_maintenance=False)
+        ),
     )
 
 
@@ -181,7 +184,7 @@ def sparklines(monitor_ids, now=None):
     last_hour = now.replace(minute=0, second=0, microsecond=0)
     hours = [last_hour - timedelta(hours=23 - i) for i in range(24)]
     rows = (
-        CheckResult.objects.filter(monitor_id__in=ids, checked_at__gte=hours[0])
+        CheckResult.objects.filter(monitor_id__in=ids, checked_at__gte=hours[0], in_maintenance=False)
         .annotate(hour=TruncHour("checked_at"))
         .values("monitor_id", "hour")
         .annotate(avg_ms=Avg("response_time_ms"))

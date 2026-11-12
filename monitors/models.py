@@ -52,6 +52,9 @@ class Monitor(models.Model):
     ssl_error = models.CharField(max_length=200, blank=True, default="")
     ssl_alerted_level = models.PositiveSmallIntegerField(null=True, blank=True)  # smallest threshold already mailed
 
+    # set while the monitor changes state too often (see tasks.set_incident_state): alerts are muted meanwhile
+    flapping_since = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         ordering = ["name", "id"]
         constraints = [
@@ -83,6 +86,8 @@ class CheckResult(models.Model):
     is_up = models.BooleanField()
     error = models.TextField(null=True, blank=True)
     region = models.CharField(max_length=16, default="eu")  # which region's worker made the request
+    # stamped at write time: the check ran inside a maintenance window, so it counts towards no uptime/average
+    in_maintenance = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["-checked_at", "-id"]
@@ -115,6 +120,7 @@ class Incident(models.Model):
     started_at = models.DateTimeField()
     resolved_at = models.DateTimeField(null=True, blank=True)
     first_error = models.TextField(blank=True, default="")
+    during_maintenance = models.BooleanField(default=False)  # was still open while a maintenance window ran
 
     class Meta:
         ordering = ["-started_at"]
@@ -132,20 +138,45 @@ class Incident(models.Model):
 
 
 class MaintenanceWindow(models.Model):
-    """Planned maintenance: no checks run, so the period doesn't count as downtime."""
+    """Planned maintenance. Checks keep running and are stored, but inside a window they open no incident and
+    count towards no uptime.
 
-    monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE, related_name="maintenance_windows")
+    `monitor=None` means every monitor of `user`. A row with a non-empty `rrule` is a TEMPLATE: it is never a
+    window itself, `maintenance.expand_windows` materialises concrete `occurrences` (rows with an empty rrule
+    and `parent` set) a month ahead, evaluated as local wall-clock time in `timezone`. Everything that asks
+    "is it in maintenance now?" only ever looks at concrete rows.
+    """
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="maintenance_windows")
+    monitor = models.ForeignKey(
+        Monitor, null=True, blank=True, on_delete=models.CASCADE, related_name="maintenance_windows"
+    )
     starts_at = models.DateTimeField("Початок")
     ends_at = models.DateTimeField("Кінець")
     reason = models.CharField("Причина", max_length=200, blank=True, default="")
+    rrule = models.CharField("Повторення (RRULE)", max_length=200, blank=True, default="")
+    timezone = models.CharField("Часовий пояс", max_length=64, default="UTC")
+    parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE, related_name="occurrences")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-starts_at"]
         constraints = [
             models.CheckConstraint(condition=Q(ends_at__gt=models.F("starts_at")), name="maintenance_ends_after_start"),
+            models.UniqueConstraint(
+                fields=["parent", "starts_at"], condition=Q(parent__isnull=False), name="uniq_occurrence_start"
+            ),
         ]
         indexes = [models.Index(fields=["monitor", "starts_at", "ends_at"], name="maint_monitor_range_idx")]
+
+    def save(self, *args, **kwargs):
+        if self.user_id is None and self.monitor_id is not None:
+            self.user_id = self.monitor.user_id
+        super().save(*args, **kwargs)
+
+    @property
+    def is_template(self):
+        return bool(self.rrule)
 
 
 class StatusPage(models.Model):

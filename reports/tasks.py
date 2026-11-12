@@ -4,11 +4,10 @@ from datetime import UTC, datetime, time, timedelta
 
 from celery import shared_task
 from django.core.files.base import ContentFile
-from django.db.models import Count, DurationField, ExpressionWrapper, Q, Sum, Value
-from django.db.models.functions import Coalesce, Greatest, Least
+from django.db.models import Q
 from django.utils import timezone
 
-from monitors import rollups
+from monitors import maintenance, rollups
 from monitors.models import Incident, Monitor
 
 from .models import ReportExport
@@ -34,19 +33,21 @@ def build_rows(user, period_start, period_end):
     # Hourly rollups for everything old (raw checks only live 7 days) plus raw for the last 1-2 hours.
     aggs = rollups.aggregate([m.pk for m in monitors], start, end)
 
-    # Incidents overlapping the period; downtime is clipped to the period.
-    clipped_end = Least(Coalesce("resolved_at", Value(timezone.now())), Value(end))
-    clipped_start = Greatest("started_at", Value(start))
-    incidents = {
-        r["monitor_id"]: r
-        for r in Incident.objects.filter(monitor__user=user, started_at__lt=end)
+    # Incidents overlapping the period; downtime is clipped to the period and MAINTENANCE TIME IS SUBTRACTED
+    # (by overlap of time, merged so overlapping windows are not counted twice).
+    now = timezone.now()
+    overlaps = maintenance.OverlapIndex(user, start, end)
+    incidents = {}
+    for monitor_id, began, finished in (
+        Incident.objects.filter(monitor__user=user, started_at__lt=end)
         .filter(Q(resolved_at__isnull=True) | Q(resolved_at__gte=start))
-        .values("monitor_id")
-        .annotate(
-            n=Count("id"),
-            downtime=Sum(ExpressionWrapper(clipped_end - clipped_start, output_field=DurationField())),
-        )
-    }
+        .values_list("monitor_id", "started_at", "resolved_at")
+    ):
+        a_, b_ = max(began, start), min(finished or now, end)
+        minutes = max((b_ - a_).total_seconds() / 60 - overlaps.minutes(monitor_id, a_, b_), 0)
+        entry = incidents.setdefault(monitor_id, {"n": 0, "minutes": 0.0})
+        entry["n"] += 1
+        entry["minutes"] += minutes
 
     for m in monitors:
         a = aggs[m.pk]
@@ -59,7 +60,7 @@ def build_rows(user, period_start, period_end):
             a.uptime if a.total else "",
             a.avg_ms if a.avg_ms is not None else "",
             i["n"] if i else 0,
-            round(i["downtime"].total_seconds() / 60, 1) if i and i["downtime"] else 0,
+            round(i["minutes"], 1) if i else 0,
         ]
 
 

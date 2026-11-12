@@ -8,18 +8,17 @@ from celery import shared_task
 from django.conf import settings
 from django.core.mail import EmailMessage, send_mail
 from django.db import IntegrityError, transaction
-from django.db.models import DateTimeField, DurationField, Exists, ExpressionWrapper, F, OuterRef, Q, Value
+from django.db.models import DateTimeField, DurationField, ExpressionWrapper, F, Q, Value
 from django.urls import reverse
 from django.utils import timezone
 
-from . import regions, rollups, subscriptions, webhooks
+from . import maintenance, regions, rollups, subscriptions, webhooks
 from .checks import MAX_BODY_BYTES, evaluate
 from .http_client import guarded_session
 from .models import (
     CheckResult,
     CheckRollupHourly,
     Incident,
-    MaintenanceWindow,
     Monitor,
     MonitorRegion,
     OutboxEvent,
@@ -35,17 +34,20 @@ DUE_SLACK = timedelta(seconds=10)
 
 
 def under_maintenance(now):
-    """Exists() subquery: the monitor has a maintenance window covering `now`."""
-    return Exists(MaintenanceWindow.objects.filter(monitor=OuterRef("pk"), starts_at__lte=now, ends_at__gt=now))
+    """Exists() subquery: a concrete maintenance window (the monitor's own or its user's) covers `now`."""
+    return maintenance.under_maintenance_expr(now)
 
 
 def due_monitors(now=None):
-    """Active, not-in-maintenance monitors whose next check is due. Filtering happens in SQL."""
+    """Active monitors whose next check is due. Filtering happens in SQL.
+
+    A maintenance window does NOT stop the checks any more: they run and are stored (flagged), they just open
+    no incident and count towards no uptime.
+    """
     now = now or timezone.now()
     one_second = Value(timedelta(seconds=1), output_field=DurationField())
     return (
         Monitor.objects.filter(is_active=True)
-        .exclude(under_maintenance(now))
         .annotate(
             due_at=ExpressionWrapper(
                 F("last_checked_at") + F("interval_seconds") * one_second,
@@ -118,29 +120,117 @@ def perform_http_check(url, *, method="GET", headers=None, body="", expected_sta
         return None, None, False, f"{type(exc).__name__}: {exc}"[:500]
 
 
+FLAP_WINDOW = timedelta(minutes=15)
+FLAP_MAX_TRANSITIONS = 4  # MORE than this many state changes inside FLAP_WINDOW = flapping
+
+
+def recent_transitions(monitor, at):
+    """Incident openings + closings in the 15 minutes up to `at` (each is one state change)."""
+    since = at - FLAP_WINDOW
+    incidents = Incident.objects.filter(monitor=monitor)
+    return (
+        incidents.filter(started_at__gt=since, started_at__lte=at).count()
+        + incidents.filter(resolved_at__gt=since, resolved_at__lte=at).count()
+    )
+
+
+def _muted_by_flapping(monitor, at):
+    """True if this transition's notifications must be suppressed. Starting to flap announces it ONCE."""
+    if monitor.flapping_since is not None:
+        return True
+    if recent_transitions(monitor, at) > FLAP_MAX_TRANSITIONS:
+        monitor.flapping_since = at
+        Monitor.objects.filter(pk=monitor.pk).update(flapping_since=at)
+        _announce(monitor, "flapping")
+        return True
+    return False
+
+
+def _maybe_stabilise(monitor, at):
+    """A quiet FLAP_WINDOW ends flapping, with one notice that says what state the monitor settled in."""
+    if monitor.flapping_since is not None and recent_transitions(monitor, at) == 0:
+        monitor.flapping_since = None
+        Monitor.objects.filter(pk=monitor.pk).update(flapping_since=None)
+        _announce(monitor, "stabilised")
+
+
+def _announce(monitor, kind):
+    """One 'unstable' / 'stabilised' notice: mail to the owner + a webhook event (written in this transaction)."""
+    is_down = Incident.objects.filter(monitor=monitor, resolved_at__isnull=True).exists()
+    webhooks.enqueue_monitor_event(monitor, f"monitor.{kind}", {"state": "down" if is_down else "up"})
+    monitor_id = monitor.pk
+    transaction.on_commit(lambda: send_flapping_notice.delay(monitor_id, kind, is_down))
+
+
 def update_incident(monitor, result):
     """Open on up->down, close on down->up, otherwise do nothing (no spam)."""
     set_incident_state(monitor, result.is_up, result.checked_at, result.error)
 
 
-def set_incident_state(monitor, is_up, at, error):
+def set_incident_state(monitor, is_up, at, error, in_maintenance=False):
     """Apply a verdict to the monitor's incident. Runs inside the monitor row lock, so two workers can't both
-    open one; the partial UniqueConstraint is the last line of defence."""
+    open one; the partial UniqueConstraint is the last line of defence.
+
+    - inside a maintenance window nothing is opened; an incident that was already open is NOT closed
+      artificially, it is flagged `during_maintenance` (and closes normally on real recovery);
+    - after a transition, notifications go out unless the monitor is flapping (see _muted_by_flapping).
+    """
     open_incident = Incident.objects.filter(monitor=monitor, resolved_at__isnull=True).first()
     if not is_up and open_incident is None:
+        if in_maintenance:
+            return
         try:
             with transaction.atomic():
                 incident = Incident.objects.create(monitor=monitor, started_at=at, first_error=error or "")
         except IntegrityError:
             return
+        if _muted_by_flapping(monitor, at):
+            return
         webhooks.enqueue_incident_event(monitor, incident, "incident.opened")  # same transaction as the incident
         transaction.on_commit(lambda: _notify_everyone(incident.pk, "opened"))
-    elif is_up and open_incident is not None:
+    elif not is_up:
+        if in_maintenance and not open_incident.during_maintenance:
+            Incident.objects.filter(pk=open_incident.pk).update(during_maintenance=True)
+    elif open_incident is not None:
         open_incident.resolved_at = at
         open_incident.save(update_fields=["resolved_at"])
+        if _muted_by_flapping(monitor, at):
+            return
         incident_id = open_incident.pk
         webhooks.enqueue_incident_event(monitor, open_incident, "incident.resolved")
         transaction.on_commit(lambda: _notify_everyone(incident_id, "resolved"))
+
+
+@shared_task(
+    autoretry_for=(SMTPException, OSError),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=3,
+)
+def send_flapping_notice(monitor_id, kind, is_down):
+    monitor = Monitor.objects.select_related("user").filter(pk=monitor_id).first()
+    if monitor is None or not monitor.user.email:
+        return "skipped"
+    if kind == "flapping":
+        subject = f"⚠️ {monitor.name} нестабільний"
+        body = (
+            f"Монітор «{monitor.name}» змінив стан понад {FLAP_MAX_TRANSITIONS} разів за 15 хвилин.\n"
+            "Щоб не засипати вас листами, наступні сповіщення про цей монітор вимкнено до стабілізації. "
+            "Історія інцидентів записується як зазвичай."
+        )
+    else:
+        state = "недоступний" if is_down else "працює"
+        subject = f"🟡 {monitor.name} стабілізувався"
+        body = f"Монітор «{monitor.name}» не змінював стан 15 хвилин. Зараз він {state}. Сповіщення знову увімкнено."
+    send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [monitor.user.email])
+    return "sent"
+
+
+@shared_task
+def expand_maintenance(now=None, horizon_days=maintenance.HORIZON_DAYS):
+    """Materialise the next month of every recurring maintenance rule (idempotent)."""
+    return maintenance.expand_windows(now, horizon_days)
 
 
 def _notify_everyone(incident_id, kind):
@@ -159,12 +249,7 @@ def claim_monitor(monitor_id, force, region=None):
     """
     region = region or regions.default_region()
     now = timezone.now()
-    monitor = (
-        Monitor.objects.filter(pk=monitor_id, is_active=True)
-        .exclude(under_maintenance(now))
-        .values("interval_seconds")
-        .first()
-    )
+    monitor = Monitor.objects.filter(pk=monitor_id, is_active=True).values("interval_seconds").first()
     if monitor is None:
         return False, now
     MonitorRegion.objects.bulk_create([MonitorRegion(monitor_id=monitor_id, region=region)], ignore_conflicts=True)
@@ -221,6 +306,7 @@ def record_check(monitor_id, region, checked_at, status_code, elapsed, is_up, er
         monitor = Monitor.objects.select_for_update(of=("self",)).filter(pk=monitor_id).first()
         if monitor is None:  # deleted while we were doing the request
             return "skipped"
+        in_window = maintenance.is_active(monitor, checked_at)
         result = CheckResult.objects.create(
             monitor=monitor,
             region=region,
@@ -229,10 +315,12 @@ def record_check(monitor_id, region, checked_at, status_code, elapsed, is_up, er
             response_time_ms=elapsed,
             is_up=is_up,
             error=error,
+            in_maintenance=in_window,
         )
+        _maybe_stabilise(monitor, checked_at)
         verdict = regions.decide(monitor, result)
         if verdict is not None:
-            set_incident_state(monitor, verdict, checked_at, error if not verdict else None)
+            set_incident_state(monitor, verdict, checked_at, error if not verdict else None, in_maintenance=in_window)
     return "up" if is_up else "down"
 
 

@@ -144,6 +144,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "monitors.tasks.schedule_checks",
         "schedule": 60.0,
     },
+    "expand-maintenance": {
+        "task": "monitors.tasks.expand_maintenance",
+        "schedule": crontab(minute=10),
+    },
     "dispatch-outbox": {
         "task": "monitors.tasks.dispatch_outbox",
         "schedule": 15.0,
@@ -199,6 +203,7 @@ CELERY_TASK_DEFAULT_QUEUE = "checks"
 CELERY_TASK_ROUTES = {
     "monitors.tasks.send_incident_notification": {"queue": "notifications"},
     "monitors.tasks.send_ssl_alert": {"queue": "notifications"},
+    "monitors.tasks.send_flapping_notice": {"queue": "notifications"},
     "monitors.tasks.dispatch_outbox": {"queue": "notifications"},
     "monitors.tasks.deliver_outbox_event": {"queue": "notifications"},
     "monitors.tasks.cleanup_outbox": {"queue": "notifications"},

@@ -52,14 +52,20 @@
     <h2 class="h6">Вікна обслуговування {% if in_maintenance %}<span class="badge text-bg-warning">триває</span>{% endif %}</h2>
     {% for w in windows %}
       <form method="post" action="{% url 'maintenance_delete' monitor.pk w.pk %}" class="d-flex justify-content-between small mb-1">{% csrf_token %}
-        <span>{{ w.starts_at|date:"Y-m-d H:i" }} → {{ w.ends_at|date:"Y-m-d H:i" }} UTC {% if w.reason %}· {{ w.reason }}{% endif %}</span>
+        <span>{{ w.starts_at|date:"Y-m-d H:i" }} → {{ w.ends_at|date:"Y-m-d H:i" }} UTC
+          {% if w.rrule %}🔁 <code>{{ w.rrule }}</code> ({{ w.timezone }}){% endif %}
+          {% if w.monitor_id is None %}<span class="badge text-bg-secondary">усі монітори</span>{% endif %}
+          {% if w.reason %}· {{ w.reason }}{% endif %}</span>
         <button class="btn btn-sm btn-link text-danger p-0">видалити</button>
       </form>
-    {% empty %}<p class="small text-muted mb-2">Запланованих немає. Під час вікна перевірки не виконуються і не рахуються як простій.</p>{% endfor %}
+    {% empty %}<p class="small text-muted mb-2">Запланованих немає. Під час вікна перевірки тривають, але не відкривають інцидентів і не впливають на uptime.</p>{% endfor %}
     <form method="post" action="{% url 'maintenance_create' monitor.pk %}" class="row g-2 mt-1">{% csrf_token %}
       <div class="col-6">{{ maintenance_form.starts_at }}</div>
       <div class="col-6">{{ maintenance_form.ends_at }}</div>
-      <div class="col-8">{{ maintenance_form.reason }}</div>
+      <div class="col-12">{{ maintenance_form.reason }}</div>
+      <div class="col-7"><input name="rrule" class="form-control form-control-sm" placeholder="RRULE, напр. FREQ=WEEKLY;BYDAY=SU"></div>
+      <div class="col-5"><input name="timezone" class="form-control form-control-sm" placeholder="Europe/Kyiv" value="UTC"></div>
+      <div class="col-8 small"><label><input type="checkbox" name="all_monitors"> усі мої монітори</label></div>
       <div class="col-4"><button class="btn btn-sm btn-outline-secondary w-100">Додати</button></div>
     </form>
   </div></div></div>

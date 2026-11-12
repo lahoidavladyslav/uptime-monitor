@@ -46,7 +46,7 @@ SELECT monitor_id,
        min(response_time_ms),
        max(response_time_ms)
 FROM {raw}
-WHERE checked_at >= %s AND checked_at < %s
+WHERE checked_at >= %s AND checked_at < %s AND NOT in_maintenance
 GROUP BY 1, 2
 ON CONFLICT (monitor_id, hour) DO UPDATE SET
     checks_total = EXCLUDED.checks_total, checks_up = EXCLUDED.checks_up,
@@ -58,6 +58,7 @@ ON CONFLICT (monitor_id, hour) DO UPDATE SET
 def build(start: datetime, end: datetime) -> int:
     """(Re)compute rollup rows for raw checks in [start, end) with ONE INSERT ... ON CONFLICT DO UPDATE.
 
+    Checks taken during maintenance are left out (they count towards no uptime or average).
     Idempotent and set-based: the data never leaves the database. Only hours that still have raw rows are
     written, so rebuilding a range whose raw data was already cleaned up cannot wipe good rollups.
     `start` should be hour-aligned (a half hour would produce a partial row for that hour).
@@ -127,7 +128,9 @@ def aggregate(monitor_ids, start: datetime, end: datetime, now: datetime | None 
             result[r["monitor_id"]].add(r["t"], r["u"], r["s"], r["n"], r["lo"], r["hi"])
     if raw_start < end:
         rows = (
-            CheckResult.objects.filter(monitor_id__in=ids, checked_at__gte=raw_start, checked_at__lt=end)
+            CheckResult.objects.filter(
+                monitor_id__in=ids, checked_at__gte=raw_start, checked_at__lt=end, in_maintenance=False
+            )
             .values("monitor_id")
             .annotate(
                 t=Count("id"), u=Count("id", filter=Q(is_up=True)), s=Sum("response_time_ms"),
@@ -157,7 +160,7 @@ def aggregate_by_day(monitor_ids, first_day, now: datetime | None = None) -> dic
             out.setdefault((r["monitor_id"], r["day"]), Agg()).add(r["t"], r["u"], 0, 0, None, None)
     if ids:
         rows = (
-            CheckResult.objects.filter(monitor_id__in=ids, checked_at__gte=raw_start)
+            CheckResult.objects.filter(monitor_id__in=ids, checked_at__gte=raw_start, in_maintenance=False)
             .annotate(day=TruncDate("checked_at", tzinfo=UTC))
             .values("monitor_id", "day")
             .annotate(t=Count("id"), u=Count("id", filter=Q(is_up=True)))
@@ -177,7 +180,7 @@ def hourly_series(monitor_id, start: datetime, now: datetime | None = None):
             r.checks_total, r.checks_up, r.sum_response_ms, r.response_count, r.min_response_ms, r.max_response_ms
         )
     raw = (
-        CheckResult.objects.filter(monitor_id=monitor_id, checked_at__gte=raw_start)
+        CheckResult.objects.filter(monitor_id=monitor_id, checked_at__gte=raw_start, in_maintenance=False)
         .annotate(hour=TruncHour("checked_at", tzinfo=UTC))
         .values("hour")
         .annotate(
@@ -213,7 +216,7 @@ def uptimes(monitor_ids, days_list, now: datetime | None = None) -> dict[int, di
                 totals[d][r["monitor_id"]][1] += r[f"u{d}"] or 0
         raw_start = max(boundary, min(starts.values()))
         for r in (
-            CheckResult.objects.filter(monitor_id__in=ids, checked_at__gte=raw_start)
+            CheckResult.objects.filter(monitor_id__in=ids, checked_at__gte=raw_start, in_maintenance=False)
             .values("monitor_id")
             .annotate(t=Count("id"), u=Count("id", filter=Q(is_up=True)))
         ):

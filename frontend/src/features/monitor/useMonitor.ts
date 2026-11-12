@@ -76,7 +76,13 @@ export function useCreateWindow(id: number) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: { starts_at: string; ends_at: string; reason: string }) =>
-      unwrap(client.POST("/api/v1/monitors/{monitor_id}/maintenance", { params: { path: { monitor_id: id } }, body })),
+      // one-off, this monitor only; recurrence and "all monitors" are API features the form does not expose yet
+      unwrap(
+        client.POST("/api/v1/monitors/{monitor_id}/maintenance", {
+          params: { path: { monitor_id: id } },
+          body: { ...body, rrule: "", timezone: "UTC", all_monitors: false },
+        }),
+      ),
     onSuccess: () => void qc.invalidateQueries({ queryKey: key(id) }),
   });
 }

@@ -10,6 +10,7 @@ from django.utils import timezone
 from django.views import View
 from django.views.generic import CreateView, DeleteView, ListView, UpdateView
 
+from . import maintenance
 from .formkit import FormErrorMessageMixin
 from .forms import MaintenanceForm, MonitorForm, StatusPageForm
 from .models import MaintenanceWindow, Monitor, StatusPage
@@ -141,11 +142,9 @@ class MonitorDetailView(OwnedMonitorMixin, View):
                 "region_rows": region_status(monitor),
                 "uptime_30d": windows[30],
                 "uptime_90d": windows[90],
-                "windows": monitor.maintenance_windows.filter(ends_at__gt=timezone.now()).order_by("starts_at")[:10],
+                "windows": maintenance.visible_for(monitor)[:10],
                 "maintenance_form": MaintenanceForm(),
-                "in_maintenance": monitor.maintenance_windows.filter(
-                    starts_at__lte=timezone.now(), ends_at__gt=timezone.now()
-                ).exists(),
+                "in_maintenance": maintenance.is_active(monitor, timezone.now()),
             },
         )
 
@@ -155,9 +154,6 @@ class CheckNowView(OwnedMonitorMixin, View):
         monitor = get_object_or_404(self.get_queryset(), pk=pk)
         if not cooldown_ok(f"check-now:{monitor.pk}", settings.CHECK_NOW_COOLDOWN_SECONDS):
             messages.warning(request, "Зачекайте кілька секунд перед наступною перевіркою.")
-            return redirect("monitor_detail", pk=monitor.pk)
-        if monitor.maintenance_windows.filter(starts_at__lte=timezone.now(), ends_at__gt=timezone.now()).exists():
-            messages.warning(request, "Монітор зараз на обслуговуванні — перевірки призупинено.")
             return redirect("monitor_detail", pk=monitor.pk)
         enqueue_checks(monitor.pk, force=True)
         if monitor.url.lower().startswith("https://"):
@@ -171,10 +167,10 @@ class MaintenanceCreateView(OwnedMonitorMixin, View):
         monitor = get_object_or_404(self.get_queryset(), pk=pk)
         form = MaintenanceForm(request.POST)
         if form.is_valid():
-            window = form.save(commit=False)
-            window.monitor = monitor
-            window.save()
-            messages.success(request, "Вікно обслуговування додано: у цей час перевірки не виконуються.")
+            maintenance.save_from_form(form, monitor)
+            messages.success(
+                request, "Вікно обслуговування додано: перевірки тривають, але інциденти не відкриваються."
+            )
         else:
             for error in sum(form.errors.values(), []):
                 messages.error(request, error)
@@ -184,7 +180,9 @@ class MaintenanceCreateView(OwnedMonitorMixin, View):
 class MaintenanceDeleteView(OwnedMonitorMixin, View):
     def post(self, request, pk, window_id):
         monitor = get_object_or_404(self.get_queryset(), pk=pk)
-        get_object_or_404(MaintenanceWindow, pk=window_id, monitor=monitor).delete()
+        get_object_or_404(
+            MaintenanceWindow.objects.filter(maintenance.applies_to(monitor.pk, monitor.user_id)), pk=window_id
+        ).delete()
         messages.success(request, "Вікно видалено.")
         return redirect("monitor_detail", pk=monitor.pk)
 

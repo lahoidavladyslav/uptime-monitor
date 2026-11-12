@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from monitors.checks import evaluate, headers_to_lines, parse_header_lines, parse_status_spec, status_ok
 from monitors.forms import MaintenanceForm, MonitorForm
-from monitors.models import CheckResult, MaintenanceWindow, Monitor
+from monitors.models import CheckResult, Incident, MaintenanceWindow, Monitor
 from monitors.tasks import (
     check_monitor,
     check_ssl,
@@ -169,32 +169,29 @@ def window(monitor, start=-10, end=+60):
     )
 
 
-def test_due_monitors_skips_those_in_maintenance(user, monitor):
-    assert monitor in due_monitors()
-    w = window(monitor)
-    assert monitor not in due_monitors()
-    w.delete()
-    window(monitor, start=-120, end=-60)  # past window
-    window(monitor, start=30, end=90)  # future window
+def test_maintenance_does_not_stop_checks_from_being_scheduled(user, monitor):
+    """H6: a window used to stop the checks; now they keep running (flagged) and just open no incident."""
+    window(monitor)
     assert monitor in due_monitors()
 
 
 @responses.activate
-def test_no_check_runs_during_maintenance_even_when_forced(monitor):
+def test_checks_run_and_are_stored_but_flagged_during_maintenance(monitor):
     responses.add(responses.GET, monitor.url, status=500)
     window(monitor)
-    assert check_monitor(monitor.pk) == "skipped"
-    assert check_monitor(monitor.pk, force=True) == "skipped"
-    assert not CheckResult.objects.exists()
-    assert len(responses.calls) == 0
+    assert check_monitor(monitor.pk) == "down"
+    result = CheckResult.objects.get()
+    assert result.in_maintenance is True and not result.is_up
+    assert not Incident.objects.exists()  # ...and no incident, no alert
 
 
-def test_check_now_button_explains_maintenance(auth_client, monitor, monkeypatch):
+def test_check_now_works_during_maintenance(auth_client, monitor, monkeypatch):
     calls = []
     monkeypatch.setattr("monitors.views.enqueue_checks", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr("monitors.views.check_ssl.delay", lambda pk: None)
     window(monitor)
-    r = auth_client.post(reverse("monitor_check", args=[monitor.pk]), follow=True)
-    assert calls == [] and "на обслуговуванні" in r.content.decode()
+    auth_client.post(reverse("monitor_check", args=[monitor.pk]), follow=True)
+    assert len(calls) == 1
 
 
 def test_maintenance_form_validation(db):

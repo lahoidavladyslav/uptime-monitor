@@ -8,7 +8,7 @@ from django.utils import timezone
 from ninja import Query, Router, Schema
 from ninja import Status as HttpStatus
 
-from monitors import regions, services
+from monitors import maintenance, regions, services
 from monitors.forms import MaintenanceForm
 from monitors.models import MaintenanceWindow
 from monitors.tasks import check_ssl, enqueue_checks
@@ -105,6 +105,13 @@ class MaintenanceOut(Schema):
     starts_at: datetime
     ends_at: datetime
     reason: str
+    rrule: str  # non-empty = a recurring template (its occurrences are not listed)
+    timezone: str
+    all_monitors: bool
+
+    @staticmethod
+    def resolve_all_monitors(obj):
+        return obj.monitor_id is None
 
 
 class ChecksQuery(Schema):
@@ -183,17 +190,18 @@ def incidents(request, monitor_id: int):
 @router.get(
     "/{monitor_id}/maintenance", auth=session_auth, response=list[MaintenanceOut], summary="Active and upcoming windows"
 )
-def maintenance(request, monitor_id: int):
+def list_maintenance(request, monitor_id: int):
     monitor = owned(request, monitor_id)
-    return MaintenanceWindow.objects.filter(monitor_id=monitor.pk, ends_at__gt=timezone.now()).order_by("starts_at")[
-        :20
-    ]
+    return maintenance.visible_for(monitor)[:20]
 
 
 class MaintenanceIn(Schema):
     starts_at: str  # ISO 8601; parsed and validated by MaintenanceForm (one set of rules)
     ends_at: str
     reason: str = ""
+    rrule: str = ""  # e.g. FREQ=WEEKLY;BYDAY=SU, evaluated as local wall-clock time in `timezone`
+    timezone: str = "UTC"
+    all_monitors: bool = False  # apply to every monitor of the user
 
 
 @router.post(
@@ -206,8 +214,6 @@ def check_now(request, monitor_id: int):
     monitor = owned(request, monitor_id)
     if not services.cooldown_ok(f"check-now:{monitor.pk}", settings.CHECK_NOW_COOLDOWN_SECONDS):
         raise ApiError(429, "Зачекайте кілька секунд перед наступною перевіркою.")
-    if monitor.in_maintenance:
-        raise ApiError(409, "Монітор зараз на обслуговуванні — перевірки призупинено.")
     enqueue_checks(monitor.pk, force=True)
     if monitor.url.lower().startswith("https://"):
         check_ssl.delay(monitor.pk)
@@ -225,10 +231,7 @@ def create_maintenance(request, monitor_id: int, data: MaintenanceIn):
     form = MaintenanceForm(data.dict())
     if not form.is_valid():
         raise ApiError(422, "Перевірте введені дані.", field_errors_from_django(form.errors))
-    window = form.save(commit=False)
-    window.monitor = monitor
-    window.save()
-    return HttpStatus(201, window)
+    return HttpStatus(201, maintenance.save_from_form(form, monitor))
 
 
 @router.delete(
@@ -239,7 +242,9 @@ def create_maintenance(request, monitor_id: int, data: MaintenanceIn):
 )
 def delete_maintenance(request, monitor_id: int, window_id: int):
     monitor = owned(request, monitor_id)
-    deleted, _ = MaintenanceWindow.objects.filter(pk=window_id, monitor_id=monitor.pk).delete()
+    deleted, _ = MaintenanceWindow.objects.filter(
+        maintenance.applies_to(monitor.pk, monitor.user_id), pk=window_id
+    ).delete()
     if not deleted:
         raise Http404
     return {"status": "deleted"}

@@ -60,7 +60,12 @@ def monitor_deleting(sender, instance, **kwargs):
 @receiver(post_save, sender=MaintenanceWindow)
 @receiver(post_delete, sender=MaintenanceWindow)
 def maintenance_changed(sender, instance, **kwargs):
-    _invalidate(_monitor_keys(instance.monitor))
+    # a user-wide window (monitor is NULL) changes the status of every public page of that user
+    monitors = [instance.monitor] if instance.monitor_id else Monitor.objects.filter(user_id=instance.user_id)
+    keys = []
+    for monitor in monitors:
+        keys += _monitor_keys(monitor)
+    _invalidate(keys)
 
 
 @receiver(post_save, sender=StatusPage)

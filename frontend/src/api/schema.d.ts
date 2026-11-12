@@ -284,7 +284,7 @@ export interface paths {
             cookie?: never;
         };
         /** Active and upcoming windows */
-        get: operations["api_routers_monitors_maintenance"];
+        get: operations["api_routers_monitors_list_maintenance"];
         put?: never;
         /** Schedule a maintenance window */
         post: operations["api_routers_monitors_create_maintenance"];
@@ -453,6 +453,11 @@ export interface components {
         };
         /** MaintenanceIn */
         MaintenanceIn: {
+            /**
+             * All Monitors
+             * @default false
+             */
+            all_monitors: boolean;
             /** Ends At */
             ends_at: string;
             /**
@@ -460,11 +465,23 @@ export interface components {
              * @default
              */
             reason: string;
+            /**
+             * Rrule
+             * @default
+             */
+            rrule: string;
             /** Starts At */
             starts_at: string;
+            /**
+             * Timezone
+             * @default UTC
+             */
+            timezone: string;
         };
         /** MaintenanceOut */
         MaintenanceOut: {
+            /** All Monitors */
+            all_monitors: boolean;
             /**
              * Ends At
              * Format: date-time
@@ -474,11 +491,15 @@ export interface components {
             id: number;
             /** Reason */
             reason: string;
+            /** Rrule */
+            rrule: string;
             /**
              * Starts At
              * Format: date-time
              */
             starts_at: string;
+            /** Timezone */
+            timezone: string;
         };
         /** MonitorDetailOut */
         MonitorDetailOut: {
@@ -1003,7 +1024,7 @@ export interface operations {
             };
         };
     };
-    api_routers_monitors_maintenance: {
+    api_routers_monitors_list_maintenance: {
         parameters: {
             query?: never;
             header?: never;

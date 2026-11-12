@@ -3,6 +3,7 @@ from django.utils import timezone
 
 from .checks import headers_to_lines, parse_header_lines, parse_status_spec
 from .formkit import BootstrapFormMixin, HttpURLField
+from .maintenance import validate_rrule, validate_timezone
 from .models import MaintenanceWindow, Monitor, StatusPage, WebhookEndpoint
 from .security import blocked_reason
 
@@ -79,22 +80,44 @@ class MonitorForm(BootstrapFormMixin, forms.ModelForm):
 
 
 class MaintenanceForm(BootstrapFormMixin, forms.ModelForm):
+    # not model fields: they decide HOW the window is stored (scope) and are optional extras
+    all_monitors = forms.BooleanField(required=False, label="Усі мої монітори")
+
     class Meta:
         model = MaintenanceWindow
-        fields = ["starts_at", "ends_at", "reason"]
+        fields = ["starts_at", "ends_at", "reason", "rrule", "timezone"]
         widgets = {
             "starts_at": forms.DateTimeInput(attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"),
             "ends_at": forms.DateTimeInput(attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"),
         }
         labels = {"starts_at": "Початок (UTC)", "ends_at": "Кінець (UTC)"}
 
+    rrule = forms.CharField(
+        required=False,
+        label="Повторення (RRULE)",
+        help_text="Напр. FREQ=WEEKLY;BYDAY=SU. Час доби береться з вікна, за локальним часом пояса нижче.",
+    )
+    timezone = forms.CharField(required=False, label="Часовий пояс", help_text="IANA, напр. Europe/Kyiv")
+
     def clean(self):
         cleaned = super().clean()
+        rule = (cleaned.get("rrule") or "").strip()
+        cleaned["timezone"] = (cleaned.get("timezone") or "UTC").strip()
+        try:
+            validate_timezone(cleaned["timezone"])
+        except ValueError as exc:
+            self.add_error("timezone", str(exc))
+        if rule:
+            try:
+                cleaned["rrule"] = validate_rrule(rule)
+            except ValueError as exc:
+                self.add_error("rrule", str(exc))
         start, end = cleaned.get("starts_at"), cleaned.get("ends_at")
         if start and end:
             if end <= start:
                 raise forms.ValidationError("Кінець має бути пізніше за початок.")
-            if end <= timezone.now():
+            # a recurring template's own first slot may lie in the past; a one-off window may not
+            if not rule and end <= timezone.now():
                 raise forms.ValidationError("Вікно обслуговування вже минуло.")
             if (end - start).days > 30:
                 raise forms.ValidationError("Вікно не може бути довшим за 30 днів.")

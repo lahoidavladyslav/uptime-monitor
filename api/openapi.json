@@ -262,6 +262,11 @@
       },
       "MaintenanceIn": {
         "properties": {
+          "all_monitors": {
+            "default": false,
+            "title": "All Monitors",
+            "type": "boolean"
+          },
           "ends_at": {
             "title": "Ends At",
             "type": "string"
@@ -271,8 +276,18 @@
             "title": "Reason",
             "type": "string"
           },
+          "rrule": {
+            "default": "",
+            "title": "Rrule",
+            "type": "string"
+          },
           "starts_at": {
             "title": "Starts At",
+            "type": "string"
+          },
+          "timezone": {
+            "default": "UTC",
+            "title": "Timezone",
             "type": "string"
           }
         },
@@ -285,6 +300,10 @@
       },
       "MaintenanceOut": {
         "properties": {
+          "all_monitors": {
+            "title": "All Monitors",
+            "type": "boolean"
+          },
           "ends_at": {
             "format": "date-time",
             "title": "Ends At",
@@ -298,9 +317,17 @@
             "title": "Reason",
             "type": "string"
           },
+          "rrule": {
+            "title": "Rrule",
+            "type": "string"
+          },
           "starts_at": {
             "format": "date-time",
             "title": "Starts At",
+            "type": "string"
+          },
+          "timezone": {
+            "title": "Timezone",
             "type": "string"
           }
         },
@@ -308,7 +335,10 @@
           "id",
           "starts_at",
           "ends_at",
-          "reason"
+          "reason",
+          "rrule",
+          "timezone",
+          "all_monitors"
         ],
         "title": "MaintenanceOut",
         "type": "object"
@@ -1429,7 +1459,7 @@
     },
     "/api/v1/monitors/{monitor_id}/maintenance": {
       "get": {
-        "operationId": "api_routers_monitors_maintenance",
+        "operationId": "api_routers_monitors_list_maintenance",
         "parameters": [
           {
             "in": "path",

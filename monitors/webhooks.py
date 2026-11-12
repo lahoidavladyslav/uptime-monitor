@@ -83,6 +83,27 @@ def enqueue_incident_event(monitor, incident, event_type) -> int:
     return len(rows)
 
 
+def enqueue_monitor_event(monitor, event_type, extra=None) -> int:
+    """A monitor-level (not incident-level) event, e.g. monitor.flapping. Same outbox, same transaction."""
+    rows = []
+    for endpoint in WebhookEndpoint.objects.filter(monitor=monitor, is_active=True):
+        event_id = uuid.uuid4()
+        payload = {
+            "event_id": str(event_id),
+            "type": event_type,
+            "occurred_at": timezone.now().isoformat(),
+            "monitor": {"id": monitor.pk, "name": monitor.name, "url": monitor.url},
+            **(extra or {}),
+        }
+        rows.append(OutboxEvent(event_id=event_id, endpoint=endpoint, event_type=event_type, payload=payload))
+    OutboxEvent.objects.bulk_create(rows)
+    if rows:
+        from .tasks import dispatch_outbox
+
+        transaction.on_commit(dispatch_outbox.delay)
+    return len(rows)
+
+
 # ----------------------------- claiming -----------------------------
 def claim_due_events(limit=BATCH) -> list[int]:
     """Lease up to `limit` due events to the caller; two concurrent callers never get the same row.

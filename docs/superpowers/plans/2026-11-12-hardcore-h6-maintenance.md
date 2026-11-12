@@ -1,0 +1,15 @@
+# Hardcore H6 — maintenance windows and alert de-duplication
+
+Spec: `uptime-monitor-hardcore.md` §H6. Branch `hardcore/h6-maintenance` (from `main`'s stack tip, independent of H1/H2/H4 in design but integrated with all three).
+
+**Behaviour change (deliberate):** until now a window *stopped* the checks. The brief wants the opposite: checks keep running and are stored, but they open no incidents and do not count towards uptime.
+
+**Decisions**
+- `MaintenanceWindow`: `monitor` nullable + `user` (null monitor = every monitor of the user), `rrule` + `timezone` + `parent`. A row with an `rrule` is a *template*; the periodic `expand_maintenance` task (and the save path) materialises concrete child windows 30 days ahead. Everything that asks "is it in maintenance now?" (SQL `Exists`, dashboard, public pages, quorum, uptime) keeps looking at concrete rows only, so recurrence lives in one place.
+- Recurrence is evaluated as **local wall-clock time in the window's IANA zone**: `RRULE` over naive local datetimes, each occurrence localised with `zoneinfo` (`fold=0`), end = start + the template's wall-clock duration. So "every Sunday 02:00–03:00 Europe/Kyiv" is 00:00 UTC in winter and 23:00 UTC (Saturday) in summer. A local time that does not exist on a spring-forward night resolves with the pre-transition offset; if that would make the window empty it falls back to the absolute duration. Tested on the real 2026 transitions (29 Mar, 25 Oct).
+- Only DAILY/WEEKLY/MONTHLY rules are accepted (no `FREQ=SECONDLY` bomb), no `DTSTART` inside the rule, bounded `COUNT`.
+- `CheckResult.in_maintenance` is stamped when the result is written. Every reader of uptime/response time (24h raw, dashboard, public page, rollup SQL, raw tail, reports) excludes flagged rows. **Why by membership of the sample, not by arithmetic:** subtracting "window length / interval" expected checks is wrong the moment the interval was edited, a check was lost, or three regions (H4) triple the sample count; excluding exactly the samples whose timestamp falls inside the window is the same as removing that window's *time* from the denominator, whatever the cadence was. Incident downtime in reports is subtracted by time overlap.
+- Incidents: none is opened inside a window; one that was already open is not closed artificially, it is flagged `during_maintenance` (and closes normally on real recovery).
+- Flapping: `> 4` incident transitions (open/close) within 15 min → the monitor is `flapping`; the 5th transition sends one "unstable" notice (email + webhook `monitor.flapping`) instead of an alert, and while flapping incident mails/subscriber mails/webhooks are muted (incidents are still recorded). A quiet 15 minutes ends it with one "stabilised" notice stating the current state.
+
+**Tests pin:** DST nights (both directions, nonexistent local time), `RRULE` validation, expansion idempotence/horizon, checks continue and are flagged, no incident inside a window, open incident flagged not closed, uptime excludes samples (raw and rollup agree), user-wide windows, report downtime overlap, flapping start/mute/stabilise.
