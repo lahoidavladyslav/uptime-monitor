@@ -37,7 +37,7 @@ export function renderApp(path = "/", queryClient: QueryClient = createQueryClie
   const router = createAppRouter([path]);
   const utils = render(
     <AppProviders queryClient={queryClient}>
-      <RouterProvider router={router} future={{ v7_startTransition: true }} />
+      <RouterProvider router={router} />
     </AppProviders>,
   );
   return { router, queryClient, ...utils };

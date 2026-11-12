@@ -62,4 +62,28 @@ jobs:
       # a model change without its migration must fail the build
       - run: python manage.py makemigrations --check --dry-run
       - run: python manage.py check
+      # the API contract snapshot must match the code (the frontend types are generated from it)
+      - run: python manage.py export_openapi --check
       - run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test -- --run
+      - run: npm run build
+      - run: npm audit --audit-level=high
+      # contract sync: regenerate the types from api/openapi.json; any diff means they were stale
+      - run: npm run gen:api
+      - run: git diff --exit-code -- src/api/schema.d.ts

@@ -9,6 +9,6 @@ import { createAppRouter } from "./app/router";
 
 createRoot(document.getElementById("root")!).render(
   <AppProviders>
-    <RouterProvider router={createAppRouter()} future={{ v7_startTransition: true }} />
+    <RouterProvider router={createAppRouter()} />
   </AppProviders>,
 );
