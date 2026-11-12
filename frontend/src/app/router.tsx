@@ -2,8 +2,13 @@ import { createBrowserRouter, createMemoryRouter, type RouteObject } from "react
 
 import { ComingSoon } from "@/components/ComingSoon";
 import { NotFoundPage } from "@/components/NotFoundPage";
+import { ConfirmPage } from "@/features/auth/ConfirmPage";
+import { LoginPage } from "@/features/auth/LoginPage";
 import { PublicOnly } from "@/features/auth/PublicOnly";
 import { RequireAuth } from "@/features/auth/RequireAuth";
+import { ResendPage } from "@/features/auth/ResendPage";
+import { SignupPage } from "@/features/auth/SignupPage";
+import { SignupSentPage } from "@/features/auth/SignupSentPage";
 import { t } from "@/lib/strings";
 
 // Screens still to come are <ComingSoon/> stubs; later tasks/stages replace them route by route.
@@ -13,14 +18,14 @@ export const routes: RouteObject[] = [
   {
     element: <PublicOnly />,
     children: [
-      { path: "/login", element: <Stub name="Вхід" /> },
-      { path: "/signup", element: <Stub name="Реєстрація" /> },
-      { path: "/signup/sent", element: <Stub name="Перевірте пошту" /> },
+      { path: "/login", element: <LoginPage /> },
+      { path: "/signup", element: <SignupPage /> },
+      { path: "/signup/sent", element: <SignupSentPage /> },
       { path: "/forgot-password", element: <Stub name="Скидання пароля" /> },
     ],
   },
-  { path: "/confirm/:token", element: <Stub name="Підтвердження email" /> },
-  { path: "/resend", element: <Stub name="Повторний лист" /> },
+  { path: "/confirm/:token", element: <ConfirmPage /> },
+  { path: "/resend", element: <ResendPage /> },
   { path: "/reset-password/:uid/:token", element: <Stub name="Новий пароль" /> },
   {
     element: <RequireAuth />,

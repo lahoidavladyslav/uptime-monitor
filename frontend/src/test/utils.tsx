@@ -40,3 +40,15 @@ export function renderApp(path = "/", queryClient: QueryClient = createQueryClie
   );
   return { router, queryClient, ...utils };
 }
+
+/** Stateful fake session: `me` answers 401 until a test flips `authed` (e.g. inside the login handler). */
+export function mockSession(user = USER) {
+  const session = { authed: false };
+  server.use(
+    http.get("*/api/v1/auth/me", () =>
+      session.authed ? HttpResponse.json(user) : HttpResponse.json({ message: "Потрібен вхід.", errors: {} }, { status: 401 }),
+    ),
+    http.get("*/api/v1/auth/csrf", () => HttpResponse.json({ status: "ok" })),
+  );
+  return session;
+}
