@@ -9,13 +9,15 @@ from ninja import Query, Router, Schema
 from ninja import Status as HttpStatus
 
 from monitors import maintenance, regions, services
+from monitors.checks import headers_to_lines
 from monitors.forms import MaintenanceForm
-from monitors.models import MaintenanceWindow
+from monitors.models import MaintenanceWindow, Monitor
 from monitors.tasks import check_ssl, enqueue_checks
 
 from ..deps import session_auth
 from ..errors import ApiError, field_errors_from_django
 from ..schemas import StatusOut
+from ..validation import save_monitor
 from .dashboard import Status
 
 router = Router()
@@ -31,6 +33,14 @@ def owned(request, monitor_id: int):
     if row is None:
         raise Http404
     return row
+
+
+def get_owned_monitor(request, monitor_id: int) -> Monitor:
+    """The plain model instance (the annotated `owned()` row is for read-only dashboards), 404 if not mine."""
+    monitor = Monitor.objects.filter(pk=monitor_id, user=request.auth).first()
+    if monitor is None:
+        raise Http404
+    return monitor
 
 
 class UptimeOut(Schema):
@@ -112,6 +122,62 @@ class MaintenanceOut(Schema):
     @staticmethod
     def resolve_all_monitors(obj):
         return obj.monitor_id is None
+
+
+class MonitorIn(Schema):
+    """Everything the monitor form edits. Validation is MonitorForm's, so the API and the HTML form agree."""
+
+    name: str
+    url: str
+    interval_seconds: int = 300
+    is_active: bool = True
+    is_public: bool = False
+    public_title: str = ""
+    public_logo_url: str = ""
+    http_method: Literal["GET", "HEAD", "POST"] = "GET"
+    request_headers: str = ""  # one "Name: value" per line, like the form's textarea
+    request_body: str = ""
+    expected_status: str = ""  # e.g. 200,204,300-399; empty = 2xx/3xx
+    expected_text: str = ""
+
+
+class MonitorConfigOut(MonitorIn):
+    id: int
+    public_slug: str | None
+
+
+def _config(monitor) -> dict:
+    data = {f: getattr(monitor, f) for f in MonitorIn.model_fields}
+    data["request_headers"] = headers_to_lines(monitor.request_headers)
+    return {**data, "id": monitor.pk, "public_slug": monitor.public_slug}
+
+
+def _saved(user, data: MonitorIn, instance: Monitor | None = None) -> Monitor:
+    monitor, errors = save_monitor(user, data.model_dump(), instance)
+    if errors:
+        raise ApiError(422, "Перевірте введені дані.", errors)
+    return monitor
+
+
+@router.post("", auth=session_auth, response={201: MonitorConfigOut}, summary="Create a monitor")
+def create_monitor(request, data: MonitorIn):
+    return HttpStatus(201, _config(_saved(request.auth, data)))
+
+
+@router.get("/{monitor_id}/config", auth=session_auth, response=MonitorConfigOut, summary="Editable configuration")
+def monitor_config(request, monitor_id: int):
+    return _config(get_owned_monitor(request, monitor_id))
+
+
+@router.put("/{monitor_id}", auth=session_auth, response=MonitorConfigOut, summary="Replace a monitor's configuration")
+def update_monitor(request, monitor_id: int, data: MonitorIn):
+    return _config(_saved(request.auth, data, get_owned_monitor(request, monitor_id)))
+
+
+@router.delete("/{monitor_id}", auth=session_auth, response=StatusOut, summary="Delete a monitor and its history")
+def delete_monitor(request, monitor_id: int):
+    get_owned_monitor(request, monitor_id).delete()
+    return {"status": "deleted"}
 
 
 class ChecksQuery(Schema):
