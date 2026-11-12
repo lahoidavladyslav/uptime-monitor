@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import public, views
 
 urlpatterns = [
     path("", views.DashboardView.as_view(), name="dashboard"),
@@ -15,5 +15,12 @@ urlpatterns = [
         views.MaintenanceDeleteView.as_view(),
         name="maintenance_delete",
     ),
-    path("status/<slug:slug>/", views.public_status, name="public_status"),
+    path("pages/", views.StatusPageListView.as_view(), name="statuspage_list"),
+    path("pages/new/", views.StatusPageCreateView.as_view(), name="statuspage_new"),
+    path("pages/<int:pk>/edit/", views.StatusPageUpdateView.as_view(), name="statuspage_edit"),
+    path("pages/<int:pk>/delete/", views.StatusPageDeleteView.as_view(), name="statuspage_delete"),
+    path("status/<slug:slug>/", public.monitor_status, name="public_status"),
+    path("status/<slug:slug>/feed/", public.monitor_feed, name="monitor_feed"),
+    path("page/<slug:slug>/", public.group_status, name="group_status"),
+    path("page/<slug:slug>/feed/", public.group_feed, name="group_feed"),
 ]

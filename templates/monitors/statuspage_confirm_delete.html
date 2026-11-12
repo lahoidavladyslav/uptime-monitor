@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3">Видалити сторінку «{{ object.title }}»?</h1>
+<p>Самі монітори залишаться. Публічна адреса одразу перестане працювати.</p>
+<form method="post">{% csrf_token %}<button class="btn btn-danger">Видалити</button>
+<a class="btn btn-outline-secondary" href="{% url 'statuspage_list' %}">Скасувати</a></form>
+{% endblock %}

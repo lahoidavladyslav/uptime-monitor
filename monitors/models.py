@@ -33,6 +33,12 @@ class Monitor(models.Model):
         "Очікуваний текст", max_length=200, blank=True, default="", help_text="Має бути у тілі відповіді."
     )
 
+    # --- public page branding ---
+    public_title = models.CharField("Назва на публічній сторінці", max_length=100, blank=True, default="")
+    public_logo_url = models.URLField(
+        "Логотип (URL)", max_length=500, blank=True, default="", validators=[http_url_validator]
+    )
+
     # --- SSL certificate expiry (filled by a daily task) ---
     ssl_expires_at = models.DateTimeField(null=True, blank=True)
     ssl_error = models.CharField(max_length=200, blank=True, default="")
@@ -46,6 +52,10 @@ class Monitor(models.Model):
 
     def __str__(self):
         return self.name
+
+    @property
+    def public_name(self):
+        return self.public_title or self.name
 
     def save(self, *args, **kwargs):
         # Slug is generated once, on first publication, and then never changes.
@@ -113,3 +123,22 @@ class MaintenanceWindow(models.Model):
             models.CheckConstraint(condition=Q(ends_at__gt=models.F("starts_at")), name="maintenance_ends_after_start"),
         ]
         indexes = [models.Index(fields=["monitor", "starts_at", "ends_at"], name="maint_monitor_range_idx")]
+
+
+class StatusPage(models.Model):
+    """A public page that groups several of the owner's monitors under one title."""
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="status_pages")
+    title = models.CharField("Заголовок", max_length=100)
+    slug = models.SlugField("Адреса (slug)", max_length=50, unique=True)
+    description = models.CharField("Опис", max_length=300, blank=True, default="")
+    logo_url = models.URLField("Логотип (URL)", max_length=500, blank=True, default="", validators=[http_url_validator])
+    is_public = models.BooleanField("Опублікована", default=True)
+    monitors = models.ManyToManyField(Monitor, related_name="status_pages", blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["title", "id"]
+
+    def __str__(self):
+        return self.title

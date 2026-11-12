@@ -6,6 +6,8 @@ from django.db.models import Avg, Count, Max, Min, Q
 from django.db.models.functions import TruncDate, TruncHour
 from django.utils import timezone
 
+from .models import CheckResult, Incident
+
 PERIODS = {"24h": timedelta(hours=24), "7d": timedelta(days=7)}
 
 
@@ -42,26 +44,66 @@ def day_color(uptime):
     return "green"
 
 
-def daily_bar(monitor, days=7):
-    """One query for all days: TruncDate + values + annotate."""
+def daily_bars(monitor_ids, days=7):
+    """{monitor_id: [day cells]} for many monitors with ONE query (TruncDate + values + annotate)."""
     today = timezone.now().date()
     first_day = today - timedelta(days=days - 1)
     start = datetime.combine(first_day, time.min, tzinfo=UTC)
     rows = (
-        monitor.checks.filter(checked_at__gte=start)
+        CheckResult.objects.filter(monitor_id__in=monitor_ids, checked_at__gte=start)
         .annotate(day=TruncDate("checked_at"))
-        .values("day")
+        .values("monitor_id", "day")
         .annotate(total=Count("id"), up=Count("id", filter=Q(is_up=True)))
-        .order_by("day")
     )
-    by_day = {r["day"]: r for r in rows}
-    bar = []
-    for i in range(days):
-        day = first_day + timedelta(days=i)
-        row = by_day.get(day)
-        uptime = uptime_percent(row["total"], row["up"]) if row else None
-        bar.append({"day": day, "uptime": uptime, "color": day_color(uptime)})
-    return bar
+    by_key = {(r["monitor_id"], r["day"]): r for r in rows}
+    result = {}
+    for mid in monitor_ids:
+        bar = []
+        for i in range(days):
+            day = first_day + timedelta(days=i)
+            row = by_key.get((mid, day))
+            uptime = uptime_percent(row["total"], row["up"]) if row else None
+            bar.append({"day": day, "uptime": uptime, "color": day_color(uptime)})
+        result[mid] = bar
+    return result
+
+
+def daily_bar(monitor, days=7):
+    return daily_bars([monitor.pk], days)[monitor.pk]
+
+
+def uptime_by_monitor(monitor_ids, period="7d"):
+    """{monitor_id: uptime% or None} in one grouped query."""
+    since = timezone.now() - PERIODS[period]
+    rows = (
+        CheckResult.objects.filter(monitor_id__in=monitor_ids, checked_at__gte=since)
+        .values("monitor_id")
+        .annotate(total=Count("id"), up=Count("id", filter=Q(is_up=True)))
+    )
+    found = {r["monitor_id"]: uptime_percent(r["total"], r["up"]) for r in rows}
+    return {mid: found.get(mid) for mid in monitor_ids}
+
+
+def public_incident_history(monitor_ids, days=30, limit=30):
+    """Incidents for the public page. Deliberately WITHOUT error text or URLs."""
+    since = timezone.now() - timedelta(days=days)
+    items = []
+    for inc in (
+        Incident.objects.filter(monitor_id__in=monitor_ids, started_at__gte=since)
+        .select_related("monitor")
+        .order_by("-started_at")[:limit]
+    ):
+        end = inc.resolved_at or timezone.now()
+        items.append(
+            {
+                "id": inc.pk,
+                "name": inc.monitor.public_name,
+                "started_at": inc.started_at,
+                "resolved_at": inc.resolved_at,
+                "minutes": int((end - inc.started_at).total_seconds() // 60),
+            }
+        )
+    return items
 
 
 def response_time_series(monitor, period="24h"):
