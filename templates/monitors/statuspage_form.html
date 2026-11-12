@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3">{% if object %}Редагувати сторінку{% else %}Нова статус-сторінка{% endif %}</h1>
+<form method="post" class="card card-body" style="max-width:600px" novalidate>{% csrf_token %}
+  {{ form.as_p }}
+  <div class="d-flex gap-2"><button class="btn btn-primary">Зберегти</button>
+  <a class="btn btn-outline-secondary" href="{% url 'statuspage_list' %}">Скасувати</a></div>
+</form>
+{% endblock %}

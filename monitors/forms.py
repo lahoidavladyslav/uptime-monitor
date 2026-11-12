@@ -2,7 +2,7 @@ from django import forms
 from django.utils import timezone
 
 from .checks import headers_to_lines, parse_header_lines, parse_status_spec
-from .models import MaintenanceWindow, Monitor, http_url_validator
+from .models import MaintenanceWindow, Monitor, StatusPage, http_url_validator
 from .security import blocked_reason
 
 
@@ -17,6 +17,8 @@ class MonitorForm(forms.ModelForm):
             "interval_seconds",
             "is_active",
             "is_public",
+            "public_title",
+            "public_logo_url",
             "http_method",
             "request_headers",
             "request_body",
@@ -25,6 +27,9 @@ class MonitorForm(forms.ModelForm):
         ]
         widgets = {"request_body": forms.Textarea(attrs={"rows": 3})}
 
+    public_logo_url = forms.URLField(
+        label="Логотип (URL)", required=False, max_length=500, assume_scheme="https", validators=[http_url_validator]
+    )
     request_headers = forms.CharField(
         label="Заголовки",
         required=False,
@@ -95,3 +100,21 @@ class MaintenanceForm(forms.ModelForm):
             if (end - start).days > 30:
                 raise forms.ValidationError("Вікно не може бути довшим за 30 днів.")
         return cleaned
+
+
+class StatusPageForm(forms.ModelForm):
+    class Meta:
+        model = StatusPage
+        fields = ["title", "slug", "description", "logo_url", "is_public", "monitors"]
+        widgets = {"monitors": forms.CheckboxSelectMultiple}
+        help_texts = {"slug": "Сторінка буде за адресою /page/<slug>/"}
+
+    logo_url = forms.URLField(
+        label="Логотип (URL)", required=False, max_length=500, assume_scheme="https", validators=[http_url_validator]
+    )
+
+    def __init__(self, *args, user, **kwargs):
+        super().__init__(*args, **kwargs)
+        # a user can only publish their own monitors
+        self.fields["monitors"].queryset = Monitor.objects.filter(user=user)
+        self.fields["monitors"].required = False

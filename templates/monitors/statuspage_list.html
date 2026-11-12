@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="h3 m-0">Статус-сторінки</h1>
+  <a class="btn btn-primary" href="{% url 'statuspage_new' %}">+ Створити</a>
+</div>
+<table class="table bg-white align-middle">
+  <thead><tr><th>Заголовок</th><th>Адреса</th><th>Монітори</th><th></th></tr></thead>
+  <tbody>
+  {% for p in pages %}
+    <tr>
+      <td>{{ p.title }} {% if not p.is_public %}<span class="badge text-bg-secondary">прихована</span>{% endif %}</td>
+      <td>{% if p.is_public %}<a href="{% url 'group_status' p.slug %}">/page/{{ p.slug }}/</a>{% else %}/page/{{ p.slug }}/{% endif %}</td>
+      <td>{{ p.monitors.all|length }}</td>
+      <td class="text-end"><a href="{% url 'statuspage_edit' p.pk %}">змінити</a> · <a class="text-danger" href="{% url 'statuspage_delete' p.pk %}">видалити</a></td>
+    </tr>
+  {% empty %}<tr><td colspan="4" class="text-center text-muted py-4">Сторінок ще немає. Згрупуйте кілька моніторів в одну публічну сторінку.</td></tr>{% endfor %}
+  </tbody>
+</table>
+{% endblock %}

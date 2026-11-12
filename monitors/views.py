@@ -7,18 +7,16 @@ from django.core.cache import cache
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, OuterRef, Q, Subquery
-from django.http import Http404, HttpResponse
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
-from django.template.loader import render_to_string
 from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views import View
 from django.views.generic import CreateView, DeleteView, ListView, UpdateView
 
-from .forms import MaintenanceForm, MonitorForm
-from .models import CheckResult, Incident, MaintenanceWindow, Monitor
-from .services import PERIODS, daily_bar, monitor_stats, response_time_series, uptime_percent
-from .signals import status_cache_key
+from .forms import MaintenanceForm, MonitorForm, StatusPageForm
+from .models import CheckResult, Incident, MaintenanceWindow, Monitor, StatusPage
+from .services import PERIODS, monitor_stats, response_time_series, uptime_percent
 from .tasks import check_monitor, check_ssl, under_maintenance
 
 
@@ -207,32 +205,47 @@ class MaintenanceDeleteView(OwnedMonitorMixin, View):
         return redirect("monitor_detail", pk=monitor.pk)
 
 
-def public_status(request, slug):
-    """Public, login-free, cached whole-page for 60s.
+class StatusPageListView(LoginRequiredMixin, ListView):
+    template_name = "monitors/statuspage_list.html"
+    context_object_name = "pages"
 
-    Only the DB-hit path decides 404; a 404 is never cached. Invalidation on
-    Monitor save/delete (signals.py) makes "go private" effective at once.
-    """
-    key = status_cache_key(slug)
-    html = cache.get(key)
-    if html is None:
-        monitor = Monitor.objects.filter(public_slug=slug, is_public=True).first()
-        if monitor is None:
-            raise Http404
-        stats = monitor_stats(monitor, "7d")
-        last = monitor.checks.order_by("-checked_at").values_list("is_up", flat=True).first()
-        html = render_to_string(
-            "monitors/status.html",
-            {
-                "name": monitor.name,
-                "is_up": last,
-                "uptime": stats["uptime"],
-                "bar": daily_bar(monitor, 7),
-                "maintenance": monitor.maintenance_windows.filter(
-                    starts_at__lte=timezone.now(), ends_at__gt=timezone.now()
-                ).exists(),
-            },
-            request,
-        )
-        cache.set(key, html, settings.PUBLIC_STATUS_CACHE_SECONDS)
-    return HttpResponse(html)
+    def get_queryset(self):
+        return StatusPage.objects.filter(user=self.request.user).prefetch_related("monitors")
+
+
+class OwnedPageMixin(LoginRequiredMixin):
+    def get_queryset(self):
+        return StatusPage.objects.filter(user=self.request.user)
+
+
+class StatusPageCreateView(LoginRequiredMixin, CreateView):
+    model = StatusPage
+    form_class = StatusPageForm
+    template_name = "monitors/statuspage_form.html"
+    success_url = reverse_lazy("statuspage_list")
+
+    def get_form_kwargs(self):
+        return {**super().get_form_kwargs(), "user": self.request.user}
+
+    def form_valid(self, form):
+        form.instance.user = self.request.user
+        messages.success(self.request, "Статус-сторінку створено.")
+        return super().form_valid(form)
+
+
+class StatusPageUpdateView(OwnedPageMixin, UpdateView):
+    form_class = StatusPageForm
+    template_name = "monitors/statuspage_form.html"
+    success_url = reverse_lazy("statuspage_list")
+
+    def get_form_kwargs(self):
+        return {**super().get_form_kwargs(), "user": self.request.user}
+
+    def form_valid(self, form):
+        messages.success(self.request, "Зміни збережено.")
+        return super().form_valid(form)
+
+
+class StatusPageDeleteView(OwnedPageMixin, DeleteView):
+    template_name = "monitors/statuspage_confirm_delete.html"
+    success_url = reverse_lazy("statuspage_list")

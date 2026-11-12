@@ -15,6 +15,7 @@
     <div class="navbar-nav me-auto">
       {% if user.is_authenticated %}
       <a class="nav-link" href="{% url 'dashboard' %}">Монітори</a>
+      <a class="nav-link" href="{% url 'statuspage_list' %}">Статус-сторінки</a>
       <a class="nav-link" href="{% url 'report_list' %}">Звіти</a>
       {% endif %}
     </div>

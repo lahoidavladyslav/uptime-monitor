@@ -1,0 +1,2 @@
+{% extends "monitors/_public_base.html" %}
+{% block cards %}{% for c in cards %}{% include "monitors/_public_card.html" %}{% empty %}<p class="text-muted">У цій сторінці ще немає моніторів.</p>{% endfor %}{% endblock %}

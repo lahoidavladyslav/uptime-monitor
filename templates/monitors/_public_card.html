@@ -1,0 +1,16 @@
+<div class="card mb-3"><div class="card-body">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <strong>{% if c.logo %}<img src="{{ c.logo }}" alt="" height="18" class="me-1" referrerpolicy="no-referrer">{% endif %}{{ c.name }}</strong>
+    <span>
+      {% if c.maintenance %}🛠 Планові роботи{% elif c.is_up is None %}⚪ Немає даних{% elif c.is_up %}🟢 Працює{% else %}🔴 Недоступний{% endif %}
+    </span>
+  </div>
+  <div class="bar">
+    {% for d in c.bar %}<div class="cell {{ d.color }}" title="{{ d.day }}: {% if d.uptime is None %}немає даних{% else %}{{ d.uptime }}%{% endif %}"></div>{% endfor %}
+  </div>
+  <div class="d-flex justify-content-between small text-muted mt-1">
+    <span>{{ c.bar.0.day }}</span>
+    <span>Uptime 7 днів: {% if c.uptime is None %}немає даних{% else %}{{ c.uptime }}%{% endif %}</span>
+    <span>{{ c.bar.6.day }}</span>
+  </div>
+</div></div>
