@@ -32,5 +32,10 @@ export const t = {
     retry: "Повторити",
     noData: "немає даних",
     loading: "Завантаження",
+    comingSoon: "Цей розділ у розробці.",
+  },
+  notFound: {
+    title: "Сторінку не знайдено",
+    home: "На головну",
   },
 } as const;
