@@ -14,6 +14,7 @@ from django.utils import timezone
 from django.views import View
 from django.views.generic import CreateView, DeleteView, ListView, UpdateView
 
+from .formkit import FormErrorMessageMixin
 from .forms import MaintenanceForm, MonitorForm, StatusPageForm
 from .models import CheckResult, Incident, MaintenanceWindow, Monitor, StatusPage
 from .services import PERIODS, long_term_uptime, monitor_stats, response_time_series, uptime_percent
@@ -70,7 +71,7 @@ class DashboardView(HtmxLoginRequiredMixin, ListView):
         return ctx
 
 
-class MonitorCreateView(LoginRequiredMixin, CreateView):
+class MonitorCreateView(FormErrorMessageMixin, LoginRequiredMixin, CreateView):
     model = Monitor
     form_class = MonitorForm
     template_name = "monitors/monitor_form.html"
@@ -91,7 +92,7 @@ class MonitorCreateView(LoginRequiredMixin, CreateView):
         return reverse_lazy("monitor_detail", args=[self.object.pk])
 
 
-class MonitorUpdateView(OwnedMonitorMixin, UpdateView):
+class MonitorUpdateView(FormErrorMessageMixin, OwnedMonitorMixin, UpdateView):
     form_class = MonitorForm
     template_name = "monitors/monitor_form.html"
 
@@ -220,7 +221,7 @@ class OwnedPageMixin(LoginRequiredMixin):
         return StatusPage.objects.filter(user=self.request.user)
 
 
-class StatusPageCreateView(LoginRequiredMixin, CreateView):
+class StatusPageCreateView(FormErrorMessageMixin, LoginRequiredMixin, CreateView):
     model = StatusPage
     form_class = StatusPageForm
     template_name = "monitors/statuspage_form.html"
@@ -235,7 +236,7 @@ class StatusPageCreateView(LoginRequiredMixin, CreateView):
         return super().form_valid(form)
 
 
-class StatusPageUpdateView(OwnedPageMixin, UpdateView):
+class StatusPageUpdateView(FormErrorMessageMixin, OwnedPageMixin, UpdateView):
     form_class = StatusPageForm
     template_name = "monitors/statuspage_form.html"
     success_url = reverse_lazy("statuspage_list")

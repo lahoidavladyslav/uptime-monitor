@@ -2,10 +2,12 @@ from django import forms
 from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 
+from monitors.formkit import BootstrapFormMixin
+
 User = get_user_model()
 
 
-class SignupForm(UserCreationForm):
+class SignupForm(BootstrapFormMixin, UserCreationForm):
     email = forms.EmailField(label="Email", required=True)
 
     class Meta:
@@ -19,7 +21,7 @@ class SignupForm(UserCreationForm):
         return email
 
 
-class LoginForm(AuthenticationForm):
+class LoginForm(BootstrapFormMixin, AuthenticationForm):
     error_messages = {
         **AuthenticationForm.error_messages,
         # The stock backend refuses inactive users before the form sees them, so one message
@@ -29,9 +31,9 @@ class LoginForm(AuthenticationForm):
     }
 
 
-class ResendForm(forms.Form):
+class ResendForm(BootstrapFormMixin, forms.Form):
     email = forms.EmailField(label="Email")
 
 
-class CodeForm(forms.Form):
+class CodeForm(BootstrapFormMixin, forms.Form):
     code = forms.CharField(label="Код", max_length=32, strip=True)
