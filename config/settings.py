@@ -93,6 +93,12 @@ MEDIA_URL = "media/"
 MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", BASE_DIR / "media"))
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+from django.contrib.messages import constants as message_constants  # noqa: E402
+
+# Bootstrap calls the red alert "danger"; Django's default tag "error" has no such class,
+# so every error flash message used to render unstyled.
+MESSAGE_TAGS = {message_constants.ERROR: "danger", message_constants.DEBUG: "secondary"}
+
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "dashboard"
 LOGOUT_REDIRECT_URL = "login"

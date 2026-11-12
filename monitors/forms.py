@@ -2,12 +2,13 @@ from django import forms
 from django.utils import timezone
 
 from .checks import headers_to_lines, parse_header_lines, parse_status_spec
-from .models import MaintenanceWindow, Monitor, StatusPage, http_url_validator
+from .formkit import BootstrapFormMixin, HttpURLField
+from .models import MaintenanceWindow, Monitor, StatusPage
 from .security import blocked_reason
 
 
-class MonitorForm(forms.ModelForm):
-    url = forms.URLField(label="URL", max_length=500, assume_scheme="https", validators=[http_url_validator])
+class MonitorForm(BootstrapFormMixin, forms.ModelForm):
+    url = HttpURLField(label="URL", max_length=500)
 
     class Meta:
         model = Monitor
@@ -27,9 +28,7 @@ class MonitorForm(forms.ModelForm):
         ]
         widgets = {"request_body": forms.Textarea(attrs={"rows": 3})}
 
-    public_logo_url = forms.URLField(
-        label="Логотип (URL)", required=False, max_length=500, assume_scheme="https", validators=[http_url_validator]
-    )
+    public_logo_url = HttpURLField(label="Логотип (URL)", required=False, max_length=500)
     request_headers = forms.CharField(
         label="Заголовки",
         required=False,
@@ -79,7 +78,7 @@ class MonitorForm(forms.ModelForm):
         return cleaned
 
 
-class MaintenanceForm(forms.ModelForm):
+class MaintenanceForm(BootstrapFormMixin, forms.ModelForm):
     class Meta:
         model = MaintenanceWindow
         fields = ["starts_at", "ends_at", "reason"]
@@ -102,16 +101,14 @@ class MaintenanceForm(forms.ModelForm):
         return cleaned
 
 
-class StatusPageForm(forms.ModelForm):
+class StatusPageForm(BootstrapFormMixin, forms.ModelForm):
     class Meta:
         model = StatusPage
         fields = ["title", "slug", "description", "logo_url", "is_public", "monitors"]
         widgets = {"monitors": forms.CheckboxSelectMultiple}
         help_texts = {"slug": "Сторінка буде за адресою /page/<slug>/"}
 
-    logo_url = forms.URLField(
-        label="Логотип (URL)", required=False, max_length=500, assume_scheme="https", validators=[http_url_validator]
-    )
+    logo_url = HttpURLField(label="Логотип (URL)", required=False, max_length=500)
 
     def __init__(self, *args, user, **kwargs):
         super().__init__(*args, **kwargs)
