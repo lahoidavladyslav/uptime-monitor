@@ -32,6 +32,8 @@ export function stubMatchMedia() {
 /** Renders the real app (providers + router) at `path`. */
 export function renderApp(path = "/", queryClient: QueryClient = createQueryClient()) {
   stubMatchMedia();
+  // Production retries transient errors twice with backoff; tests keep the retries but not the waiting.
+  queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retryDelay: 0 } });
   const router = createAppRouter([path]);
   const utils = render(
     <AppProviders queryClient={queryClient}>

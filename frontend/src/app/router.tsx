@@ -3,6 +3,7 @@ import { createBrowserRouter, createMemoryRouter, type RouteObject } from "react
 import { ComingSoon } from "@/components/ComingSoon";
 import { NotFoundPage } from "@/components/NotFoundPage";
 import { ConfirmPage } from "@/features/auth/ConfirmPage";
+import { DashboardPage } from "@/features/dashboard/DashboardPage";
 import { ForgotPasswordPage } from "@/features/auth/ForgotPasswordPage";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { PublicOnly } from "@/features/auth/PublicOnly";
@@ -32,7 +33,7 @@ export const routes: RouteObject[] = [
   {
     element: <RequireAuth />,
     children: [
-      { path: "/", element: <Stub name={t.nav.monitors} /> },
+      { path: "/", element: <DashboardPage /> },
       { path: "/monitors/:id", element: <Stub name="Монітор" /> },
       { path: "/status-pages", element: <Stub name={t.nav.statusPages} /> },
       { path: "/reports", element: <Stub name={t.nav.reports} /> },
