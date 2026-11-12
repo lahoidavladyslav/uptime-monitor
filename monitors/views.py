@@ -2,7 +2,6 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth import login
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.cache import cache
 from django.core.paginator import Paginator
@@ -14,24 +13,12 @@ from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views import View
 from django.views.generic import CreateView, DeleteView, ListView, UpdateView
-from django.views.generic.edit import FormView
 
-from .forms import MonitorForm, SignupForm
+from .forms import MonitorForm
 from .models import CheckResult, Incident, Monitor
 from .services import PERIODS, daily_bar, monitor_stats, response_time_series, uptime_percent
 from .signals import status_cache_key
 from .tasks import check_monitor
-
-
-class SignupView(FormView):
-    template_name = "registration/signup.html"
-    form_class = SignupForm
-    success_url = reverse_lazy("dashboard")
-
-    def form_valid(self, form):
-        user = form.save()
-        login(self.request, user)
-        return super().form_valid(form)
 
 
 class OwnedMonitorMixin(LoginRequiredMixin):

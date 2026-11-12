@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3">Безпека акаунта</h1>
+<div class="card card-body" style="max-width:560px">
+  <h2 class="h5">Двофакторна автентифікація (TOTP)</h2>
+  {% if device %}
+    <p>🟢 Увімкнена. Залишилось кодів відновлення: <strong>{{ device.recovery_hashes|length }}</strong>.</p>
+    <form method="post" action="{% url 'two_factor_disable' %}" class="d-flex gap-2">{% csrf_token %}
+      <input type="password" name="password" class="form-control" placeholder="Пароль для підтвердження" required>
+      <button class="btn btn-outline-danger">Вимкнути</button>
+    </form>
+  {% else %}
+    <p>Вимкнена. Додатковий код із телефону захищає акаунт, навіть якщо пароль витік.</p>
+    <a class="btn btn-primary" href="{% url 'two_factor_setup' %}">Увімкнути</a>
+  {% endif %}
+</div>
+{% endblock %}

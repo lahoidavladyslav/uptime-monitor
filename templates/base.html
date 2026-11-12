@@ -20,7 +20,7 @@
     </div>
     <div class="d-flex align-items-center gap-2">
       {% if user.is_authenticated %}
-        <span class="text-light small">{{ user.username }}</span>
+        <a class="text-light small" href="{% url 'security' %}">{{ user.username }}</a>
         <form method="post" action="{% url 'logout' %}">{% csrf_token %}
           <button class="btn btn-sm btn-outline-light">Вийти</button></form>
       {% else %}

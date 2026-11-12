@@ -16,6 +16,11 @@ def _is_public(ip_text):
     return ip.is_global
 
 
+def _resolve(host):
+    """Single seam for DNS so tests can fake it without touching the global socket module."""
+    return socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+
+
 def blocked_reason(url):
     """Return a human-readable reason if `url` must not be requested, else None.
 
@@ -34,7 +39,7 @@ def blocked_reason(url):
     else:
         return None if _is_public(str(literal)) else "Адреса веде у приватну/внутрішню мережу"
     try:
-        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        infos = _resolve(host)
     except socket.gaierror:
         return None
     for info in infos:

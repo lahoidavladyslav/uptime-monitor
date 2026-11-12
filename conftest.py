@@ -18,7 +18,7 @@ def _fake_public_dns(monkeypatch):
     def fake(host, *a, **k):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
 
-    monkeypatch.setattr("monitors.security.socket.getaddrinfo", fake)
+    monkeypatch.setattr("monitors.security._resolve", fake)
 
 
 @pytest.fixture

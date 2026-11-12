@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3">Двофакторна автентифікація</h1>
+<p>Введіть 6-значний код із застосунку-автентифікатора або одноразовий код відновлення.</p>
+<form method="post" class="card card-body" style="max-width:420px">{% csrf_token %}
+  {{ form.as_p }}<button class="btn btn-primary">Підтвердити</button>
+</form>
+{% endblock %}

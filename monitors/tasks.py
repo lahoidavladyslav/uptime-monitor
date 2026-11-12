@@ -11,6 +11,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import DateTimeField, DurationField, ExpressionWrapper, F, Q, Value
 from django.utils import timezone
 
+from .http_client import guarded_session
 from .models import CheckResult, Incident, Monitor
 from .security import blocked_reason
 
@@ -54,13 +55,16 @@ def perform_http_check(url):
     try:
         # allow_redirects=False: 3xx counts as "up" per spec, we don't chase it.
         # stream=True: we only need the headers, not the body.
-        with requests.get(
-            url,
-            timeout=settings.CHECK_TIMEOUT_SECONDS,
-            allow_redirects=False,
-            stream=True,
-            headers={"User-Agent": "UptimeMonitor/1.0"},
-        ) as response:
+        with (
+            guarded_session() as session,
+            session.get(
+                url,
+                timeout=settings.CHECK_TIMEOUT_SECONDS,
+                allow_redirects=False,
+                stream=True,
+                headers={"User-Agent": "UptimeMonitor/1.0"},
+            ) as response,
+        ):
             elapsed = round((time.monotonic() - started) * 1000)
             code = response.status_code
             is_up = 200 <= code < 400
@@ -68,6 +72,8 @@ def perform_http_check(url):
     except requests.Timeout:
         return None, None, False, f"Timeout after {settings.CHECK_TIMEOUT_SECONDS}s"
     except requests.RequestException as exc:
+        if "non-public address" in str(exc):  # raised by the connection-level SSRF guard
+            return None, None, False, "Заблоковано: адреса веде у приватну/внутрішню мережу"
         return None, None, False, f"{type(exc).__name__}: {exc}"[:500]
 
 

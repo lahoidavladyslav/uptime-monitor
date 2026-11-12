@@ -3,6 +3,9 @@
 <h1 class="h3">Вхід</h1>
 <form method="post" class="card card-body" style="max-width:420px">{% csrf_token %}
   {{ form.as_p }}
+  <input type="hidden" name="next" value="{{ next }}">
   <button class="btn btn-primary">Увійти</button>
+  <div class="small mt-3"><a href="{% url 'password_reset' %}">Забули пароль?</a> ·
+    <a href="{% url 'resend_confirmation' %}">Лист підтвердження</a></div>
 </form>
 {% endblock %}

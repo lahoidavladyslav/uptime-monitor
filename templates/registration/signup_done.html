@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3">Перевірте пошту</h1>
+<p>Ми надіслали лист на <strong>{{ email }}</strong>. Відкрийте посилання з нього, щоб активувати акаунт.</p>
+<p><a href="{% url 'resend_confirmation' %}">Не отримали лист?</a></p>
+{% endblock %}
