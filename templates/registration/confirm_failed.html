@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3">Посилання недійсне</h1>
+<p>Посилання застаріло або пошкоджене. <a href="{% url 'resend_confirmation' %}">Надіслати лист ще раз</a>.</p>
+{% endblock %}

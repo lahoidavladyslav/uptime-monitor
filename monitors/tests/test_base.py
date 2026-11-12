@@ -73,20 +73,6 @@ def test_dashboard_has_constant_query_count(auth_client, user, django_assert_max
     assert "Down вже" in r.content.decode()
 
 
-def test_signup_creates_user_and_logs_in(client, db):
-    r = client.post(
-        reverse("signup"),
-        {
-            "username": "carol",
-            "email": "c@example.com",
-            "password1": "Str0ng-pass-123",
-            "password2": "Str0ng-pass-123",
-        },
-    )
-    assert r.status_code == 302
-    assert client.get(reverse("dashboard")).status_code == 200
-
-
 def test_public_slug_generated_once(user):
     m = Monitor.objects.create(user=user, name="x", url="https://a.com")
     assert m.public_slug is None

@@ -5,3 +5,4 @@ responses
 time-machine
 ruff>=0.17,<0.18
 pre-commit
+pip-audit

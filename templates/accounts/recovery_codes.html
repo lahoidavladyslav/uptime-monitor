@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3">2FA увімкнено</h1>
+<div class="alert alert-warning">Збережіть ці коди відновлення зараз. <strong>Більше ми їх не покажемо.</strong>
+  Кожен код працює один раз і замінює код із застосунку, якщо ви втратите телефон.</div>
+<pre class="bg-white p-3 border" style="max-width:260px">{% for c in codes %}{{ c }}
+{% endfor %}</pre>
+<a class="btn btn-primary" href="{% url 'security' %}">Готово</a>
+{% endblock %}

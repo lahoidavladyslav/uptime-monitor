@@ -14,7 +14,7 @@ from monitors.tasks import check_monitor
 def resolve_to(monkeypatch, ip):
     family = socket.AF_INET6 if ":" in ip else socket.AF_INET
     monkeypatch.setattr(
-        "monitors.security.socket.getaddrinfo",
+        "monitors.security._resolve",
         lambda *a, **k: [(family, socket.SOCK_STREAM, 6, "", (ip, 0))],
     )
 
@@ -46,13 +46,13 @@ def test_public_address_allowed_and_unresolvable_not_blocked(monkeypatch):
     def nxdomain(*a, **k):
         raise socket.gaierror("nope")
 
-    monkeypatch.setattr("monitors.security.socket.getaddrinfo", nxdomain)
+    monkeypatch.setattr("monitors.security._resolve", nxdomain)
     assert blocked_reason("http://nonexistent.invalid") is None  # just reports "down" later
 
 
 def test_one_private_record_among_public_ones_blocks(monkeypatch):
     monkeypatch.setattr(
-        "monitors.security.socket.getaddrinfo",
+        "monitors.security._resolve",
         lambda *a, **k: [
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0)),
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 0)),

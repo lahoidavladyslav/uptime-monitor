@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3">Увімкнення 2FA</h1>
+<div class="card card-body" style="max-width:560px">
+  <p>1. Відскануйте QR-код у застосунку-автентифікаторі (Google Authenticator, 1Password, Authy).</p>
+  <div style="max-width:220px" class="mb-2">{{ qr|safe }}</div>
+  <p class="small text-muted">Або введіть ключ вручну: <code>{{ secret }}</code></p>
+  <p>2. Введіть поточний 6-значний код, щоб підтвердити.</p>
+  <form method="post">{% csrf_token %}{{ form.as_p }}<button class="btn btn-primary">Увімкнути</button></form>
+</div>
+{% endblock %}
