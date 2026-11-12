@@ -10,3 +10,4 @@ qrcode>=7
 sentry-sdk>=2
 whitenoise>=6
 django-ninja>=1.3,<2
+cryptography>=42

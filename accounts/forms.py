@@ -14,11 +14,10 @@ class SignupForm(BootstrapFormMixin, UserCreationForm):
         model = User
         fields = ("username", "email")
 
+    # No "email already exists" error here on purpose: it would let anyone probe which addresses
+    # have accounts. accounts.services.register() handles a known address silently instead.
     def clean_email(self):
-        email = self.cleaned_data["email"].strip()
-        if User.objects.filter(email__iexact=email).exists():
-            raise forms.ValidationError("Користувач з таким email уже існує.")
-        return email
+        return self.cleaned_data["email"].strip()
 
 
 class LoginForm(BootstrapFormMixin, AuthenticationForm):

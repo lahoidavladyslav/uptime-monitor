@@ -58,6 +58,34 @@ def resend_confirmation(email: str, link_for: Callable[[object], str]) -> None:
         send_confirmation_email(user, link_for(user))
 
 
+def register(form, confirm_link_for: Callable[[object], str], reset_link: str):
+    """Sign-up that never reveals whether an email already has an account.
+
+    New address        -> inactive account + confirmation mail.
+    Unconfirmed owner  -> the same confirmation mail again, no second account.
+    Active account     -> a "you already have an account" mail to its owner, nothing created.
+    The caller answers identically in all three cases.
+    """
+    email = form.cleaned_data["email"]
+    existing = User.objects.filter(email__iexact=email).order_by("-is_active", "id").first()
+    if existing is None:
+        user = form.save(commit=False)
+        user.is_active = False  # cannot log in until the email is confirmed
+        user.save()
+        send_confirmation_email(user, confirm_link_for(user))
+    elif not existing.is_active:
+        send_confirmation_email(existing, confirm_link_for(existing))
+    else:
+        send_mail(
+            "У вас уже є акаунт",
+            "Хтось (імовірно ви) спробував зареєструватися з цією адресою, але вже є акаунт із цією адресою.\n"
+            f"Якщо ви забули пароль, відновіть його: {reset_link}\n\n"
+            "Якщо це були не ви — просто проігноруйте цей лист.",
+            settings.DEFAULT_FROM_EMAIL,
+            [existing.email],
+        )
+
+
 # ---------- two-factor ----------
 def has_two_factor(user) -> bool:
     return TOTPDevice.objects.filter(user=user, confirmed=True).exists()

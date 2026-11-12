@@ -53,9 +53,34 @@ def test_confirmation_link_tampered_or_expired(client, db, settings):
         v.CONFIRM_MAX_AGE = 3 * 24 * 3600
 
 
-def test_duplicate_email_rejected(client, user):
-    r = signup(client, "other", "ALICE@example.com")
-    assert r.status_code == 200 and not User.objects.filter(username="other").exists()
+def test_signup_with_a_taken_email_answers_exactly_like_a_fresh_one(client, user):
+    fresh = signup(client, "newbie", "new@example.com")
+    taken = signup(client, "other", "ALICE@example.com")
+    assert fresh.status_code == taken.status_code == 200
+    page = lambda r, email: r.content.decode().replace(email, "EMAIL")  # noqa: E731
+    assert page(fresh, "new@example.com") == page(taken, "ALICE@example.com")
+    assert not User.objects.filter(username="other").exists()  # no second account for that address
+
+
+def test_signup_with_the_email_of_an_active_account_warns_its_owner_instead(client, user):
+    mail.outbox.clear()
+    signup(client, "other", "ALICE@example.com")
+    assert len(mail.outbox) == 1 and mail.outbox[0].to == ["alice@example.com"]
+    body = mail.outbox[0].body
+    assert "вже є акаунт" in body and "password-reset" in body and "/confirm/" not in body
+
+
+def test_signup_with_the_email_of_an_unconfirmed_account_resends_its_confirmation(client, db):
+    signup(client, "carol", "c@example.com")
+    mail.outbox.clear()
+    signup(client, "other", "C@example.com")
+    assert User.objects.count() == 1
+    assert len(mail.outbox) == 1 and mail.outbox[0].to == ["c@example.com"] and "/confirm/" in mail.outbox[0].body
+
+
+def test_a_taken_username_is_still_reported(client, user):
+    r = signup(client, "alice", "brand-new@example.com")
+    assert r.status_code == 200 and "alice" in r.content.decode() and not mail.outbox
 
 
 def test_resend_does_not_reveal_whether_email_exists(client, db):

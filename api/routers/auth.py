@@ -87,11 +87,11 @@ def signup(request, data: SignupIn):
     form = SignupForm(data.dict())
     if not form.is_valid():
         raise ApiError(422, INVALID, field_errors_from_django(form.errors))
-    user = form.save(commit=False)
-    user.is_active = False  # no login until the email is confirmed
-    user.save()
-    link = _spa_link("/confirm/", services.make_confirmation_token(user))
-    services.send_confirmation_email(user, link)
+    services.register(
+        form,
+        lambda user: _spa_link("/confirm/", services.make_confirmation_token(user)),
+        f"{settings.FRONTEND_URL}/forgot-password",
+    )
     return Status(201, {"status": "confirmation_sent"})
 
 

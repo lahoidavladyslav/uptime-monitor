@@ -39,7 +39,16 @@ def register_handlers(api: NinjaAPI) -> None:
         return _error(exc.status_code, message)
 
 
-api = NinjaAPI(title="Uptime Monitor API", version="1.0", urls_namespace="api")
+from django.conf import settings  # noqa: E402
+
+_docs = settings.API_DOCS_ENABLED
+api = NinjaAPI(
+    title="Uptime Monitor API",
+    version="1.0",
+    urls_namespace="api",
+    docs_url="/docs" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
+)
 register_handlers(api)
 
 from .routers.account import router as account_router  # noqa: E402

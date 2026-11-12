@@ -24,21 +24,17 @@ User = get_user_model()
 
 
 # ---------- email confirmation ----------
-def send_confirmation(request, user):
-    token = services.make_confirmation_token(user)
-    services.send_confirmation_email(user, request.build_absolute_uri(reverse("confirm_email", args=[token])))
-
-
 class SignupView(FormView):
     template_name = "registration/signup.html"
     form_class = SignupForm
 
     def form_valid(self, form):
-        user = form.save(commit=False)
-        user.is_active = False  # cannot log in until the email is confirmed
-        user.save()
-        send_confirmation(self.request, user)
-        return render(self.request, "registration/signup_done.html", {"email": user.email})
+        def confirm_link_for(user):
+            token = services.make_confirmation_token(user)
+            return self.request.build_absolute_uri(reverse("confirm_email", args=[token]))
+
+        services.register(form, confirm_link_for, self.request.build_absolute_uri(reverse("password_reset")))
+        return render(self.request, "registration/signup_done.html", {"email": form.cleaned_data["email"]})
 
 
 def confirm_email(request, token):

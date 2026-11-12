@@ -7,6 +7,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from cryptography.fernet import Fernet
 from django.core.management import call_command
 from django.urls import reverse
 from django.utils import timezone
@@ -213,8 +214,21 @@ def test_detail_page_shows_long_term_uptime(auth_client, monitor):
 
 
 # ---------------- production settings fail fast ----------------
+TOTP_KEY = Fernet.generate_key().decode()
+PROD = {
+    "DJANGO_ENV": "production",
+    "SECRET_KEY": "x" * 60,
+    "ALLOWED_HOSTS": "example.com",
+    "TOTP_ENCRYPTION_KEYS": TOTP_KEY,
+}
+
+
 def run_settings(env):
-    clean = {k: v for k, v in os.environ.items() if k not in ("SECRET_KEY", "ALLOWED_HOSTS", "DJANGO_ENV", "DEBUG")}
+    clean = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("SECRET_KEY", "ALLOWED_HOSTS", "DJANGO_ENV", "DEBUG", "TOTP_ENCRYPTION_KEYS")
+    }
     return subprocess.run(
         [sys.executable, "-c", "import config.settings as s; print(s.DEBUG, s.SESSION_COOKIE_SECURE)"],
         cwd=ROOT, env={**clean, **env}, capture_output=True, text=True,
@@ -226,10 +240,12 @@ def test_production_refuses_to_start_without_secret_key_or_hosts():
     assert r.returncode != 0 and "SECRET_KEY" in r.stderr
     r = run_settings({"DJANGO_ENV": "production", "SECRET_KEY": "x" * 60})
     assert r.returncode != 0 and "ALLOWED_HOSTS" in r.stderr
+    r = run_settings({"DJANGO_ENV": "production", "SECRET_KEY": "x" * 60, "ALLOWED_HOSTS": "example.com"})
+    assert r.returncode != 0 and "TOTP_ENCRYPTION_KEYS" in r.stderr  # no key, no start
 
 
 def test_production_is_hardened():
-    r = run_settings({"DJANGO_ENV": "production", "SECRET_KEY": "x" * 60, "ALLOWED_HOSTS": "example.com", "DEBUG": "1"})
+    r = run_settings({**PROD, "DEBUG": "1"})
     assert r.returncode == 0, r.stderr
     assert r.stdout.split() == ["False", "True"]  # DEBUG is forced off, cookies are Secure
 
@@ -240,6 +256,7 @@ def test_django_deploy_check_has_no_warnings():
         "DJANGO_ENV": "production",
         "SECRET_KEY": secrets.token_urlsafe(60),
         "ALLOWED_HOSTS": "example.com",
+        "TOTP_ENCRYPTION_KEYS": TOTP_KEY,
         "DATABASE_URL": "postgres://localhost/uptime",
     }
     clean = {k: v for k, v in os.environ.items() if k not in env}
@@ -251,3 +268,44 @@ def test_django_deploy_check_has_no_warnings():
         text=True,
     )
     assert r.returncode == 0 and "WARNINGS" not in r.stdout + r.stderr, r.stdout + r.stderr
+
+
+# ---------------- API docs are not public in production ----------------
+def _api_doc_routes(env):
+    code = (
+        "import django; django.setup()\n"
+        "from django.urls import resolve, Resolver404\n"
+        "for p in ('/api/v1/docs', '/api/v1/openapi.json'):\n"
+        "    try: resolve(p); print(p, 'open')\n"
+        "    except Resolver404: print(p, 'closed')\n"
+    )
+    clean = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("SECRET_KEY", "ALLOWED_HOSTS", "DJANGO_ENV", "DEBUG", "API_DOCS", "TOTP_ENCRYPTION_KEYS")
+    }
+    r = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env={**clean, **env}, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return r.stdout.split()
+
+
+def test_swagger_and_schema_are_closed_in_production_but_open_in_dev():
+    assert _api_doc_routes({}) == ["/api/v1/docs", "open", "/api/v1/openapi.json", "open"]
+    assert _api_doc_routes(PROD) == ["/api/v1/docs", "closed", "/api/v1/openapi.json", "closed"]
+
+
+def test_api_docs_can_be_explicitly_enabled_in_production():
+    assert _api_doc_routes({**PROD, "API_DOCS": "1"})[1] == "open"
+
+
+def test_production_refuses_a_malformed_encryption_key():
+    code = "import django; django.setup()"
+    clean = {k: v for k, v in os.environ.items() if k not in ("SECRET_KEY", "ALLOWED_HOSTS", "DJANGO_ENV", "DEBUG")}
+    r = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env={**clean, **PROD, "TOTP_ENCRYPTION_KEYS": "not-a-fernet-key"},
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode != 0 and "TOTP_ENCRYPTION_KEYS" in r.stderr

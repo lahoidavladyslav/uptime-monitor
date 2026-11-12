@@ -4,6 +4,8 @@ import secrets
 from django.conf import settings
 from django.db import models
 
+from .fields import EncryptedTextField
+
 
 def _hash(code):
     return hashlib.sha256(code.encode()).hexdigest()
@@ -11,9 +13,9 @@ def _hash(code):
 
 class TOTPDevice(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="totp_device")
-    # Plain secret: TOTP needs it in clear to verify codes. Protect the DB; encrypting at rest
-    # (e.g. Fernet with a key outside the DB) is the next step, see README.
-    secret = models.CharField(max_length=64)
+    # TOTP needs the secret in clear to verify codes, so it is encrypted (Fernet) rather than hashed;
+    # the key lives outside the database (TOTP_ENCRYPTION_KEYS), so a DB leak alone doesn't expose it.
+    secret = EncryptedTextField()
     confirmed = models.BooleanField(default=False)
     last_used_step = models.BigIntegerField(default=0)  # replay protection
     recovery_hashes = models.JSONField(default=list)

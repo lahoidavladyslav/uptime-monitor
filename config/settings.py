@@ -4,6 +4,7 @@ from pathlib import Path
 import dj_database_url
 from celery.schedules import crontab
 
+from accounts.crypto import derive_dev_key
 from config.observability import build_logging
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -16,9 +17,14 @@ if PRODUCTION:
     # No insecure fallbacks in production: refuse to start instead of running unsafely.
     SECRET_KEY = os.environ["SECRET_KEY"]
     ALLOWED_HOSTS = [h for h in os.environ["ALLOWED_HOSTS"].split(",") if h]
+    # Fernet keys, newest first (the first one encrypts, all of them decrypt: that is key rotation).
+    TOTP_ENCRYPTION_KEYS = [k.strip() for k in os.environ["TOTP_ENCRYPTION_KEYS"].split(",") if k.strip()]
 else:
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-insecure-key-change-me")
     ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "*").split(",")
+    TOTP_ENCRYPTION_KEYS = [k.strip() for k in os.environ.get("TOTP_ENCRYPTION_KEYS", "").split(",") if k.strip()] or [
+        derive_dev_key(SECRET_KEY)
+    ]
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -221,6 +227,9 @@ if PRODUCTION:
     EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
     EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "1") == "1"
     DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", DEFAULT_FROM_EMAIL)
+
+# Swagger UI and the schema describe every endpoint: not for strangers in production (API_DOCS=1 re-enables).
+API_DOCS_ENABLED = os.environ.get("API_DOCS", "0" if PRODUCTION else "1") == "1"
 
 # ---------------------------- logging ----------------------------
 # JSON lines in production (what log shippers want), readable text in development. LOG_FORMAT overrides.

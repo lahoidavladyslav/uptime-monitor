@@ -6,4 +6,6 @@ class AccountsConfig(AppConfig):
     name = "accounts"
 
     def ready(self):
-        from . import signals  # noqa: F401
+        from . import crypto, signals  # noqa: F401
+
+        crypto.validate_configuration()  # a malformed/missing key stops startup, not the first 2FA login

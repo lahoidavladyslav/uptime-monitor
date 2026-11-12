@@ -61,11 +61,27 @@ def test_signup_creates_inactive_user_and_mails_spa_link(ac, db):
 
 
 def test_signup_validation_errors_use_common_format(ac, user):
-    r = signup(ac, "other", "ALICE@example.com")  # duplicate email
-    assert r.status_code == 422 and "email" in r.json()["errors"]
     r = signup(ac, password2="different")
     assert r.status_code == 422 and r.json()["errors"]["password2"]
     assert not User.objects.filter(username="carol").exists()
+
+
+def test_signup_with_a_taken_email_is_indistinguishable_and_creates_nothing(ac, user):
+    fresh = signup(ac, "newbie", "new@example.com")
+    taken = signup(ac, "other", "ALICE@example.com")
+    assert (
+        (taken.status_code, taken.json()) == (fresh.status_code, fresh.json()) == (201, {"status": "confirmation_sent"})
+    )
+    assert not User.objects.filter(username="other").exists()
+    assert mail.outbox[-1].to == ["alice@example.com"]
+    assert settings.FRONTEND_URL + "/forgot-password" in mail.outbox[-1].body  # the SPA route, not a Django page
+
+
+def test_signup_with_an_unconfirmed_email_resends_the_spa_confirmation_link(ac, db):
+    signup(ac)
+    mail.outbox.clear()
+    assert signup(ac, "other", "c@example.com").status_code == 201
+    assert User.objects.count() == 1 and link("/confirm/")
 
 
 def test_confirm_activates_and_garbage_is_400(ac, db):
