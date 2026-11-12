@@ -5,6 +5,7 @@ import { NotFoundPage } from "@/components/NotFoundPage";
 import { ConfirmPage } from "@/features/auth/ConfirmPage";
 import { DashboardPage } from "@/features/dashboard/DashboardPage";
 import { ForgotPasswordPage } from "@/features/auth/ForgotPasswordPage";
+import { MonitorPage } from "@/features/monitor/MonitorPage";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { PublicOnly } from "@/features/auth/PublicOnly";
 import { RequireAuth } from "@/features/auth/RequireAuth";
@@ -34,7 +35,8 @@ export const routes: RouteObject[] = [
     element: <RequireAuth />,
     children: [
       { path: "/", element: <DashboardPage /> },
-      { path: "/monitors/:id", element: <Stub name="Монітор" /> },
+      { path: "/monitors/new", element: <Stub name={t.monitor.newTitle} /> },
+      { path: "/monitors/:id", element: <MonitorPage /> },
       { path: "/status-pages", element: <Stub name={t.nav.statusPages} /> },
       { path: "/reports", element: <Stub name={t.nav.reports} /> },
       { path: "/security", element: <Stub name={t.nav.security} /> },

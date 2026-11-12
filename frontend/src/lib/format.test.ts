@@ -1,4 +1,4 @@
-import { formatRelative, formatUptime } from "./format";
+import { formatDateTime, formatDuration, formatRelative, formatUptime } from "./format";
 
 const NOW = new Date("2026-03-10T12:00:00Z");
 const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString();
@@ -32,5 +32,29 @@ describe("formatUptime", () => {
     [87.5, "87.5%"],
   ])("%s -> %s", (v, expected) => {
     expect(formatUptime(v as number | null)).toBe(expected);
+  });
+});
+
+describe("formatDuration / formatDateTime", () => {
+  it.each([
+    [0, "0 хв"],
+    [42, "42 хв"],
+    [60, "1 год"],
+    [90, "1 год 30 хв"],
+    [1440, "1 дн"],
+    [1500, "1 дн 1 год"],
+  ])("%i minutes -> %s", (minutes, expected) => {
+    expect(formatDuration(minutes)).toBe(expected);
+  });
+
+  it("negative or fractional input does not produce nonsense", () => {
+    expect(formatDuration(-5)).toBe("0 хв");
+    expect(formatDuration(59.9)).toBe("59 хв");
+  });
+
+  it("garbage dates read as a dash", () => {
+    expect(formatDateTime(null)).toBe("—");
+    expect(formatDateTime("not-a-date")).toBe("—");
+    expect(formatDateTime("2026-11-12T10:00:00Z")).toMatch(/2026|26/);
   });
 });

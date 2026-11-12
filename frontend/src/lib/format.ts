@@ -23,3 +23,15 @@ export function formatUptime(value: number | null): string {
   const truncated = Math.floor(value * 10) / 10;
   return `${Number.isInteger(truncated) ? truncated : truncated.toFixed(1)}%`;
 }
+
+/** "1 год 30 хв", "42 хв", "2 дн 3 год" for a number of minutes. */
+export function formatDuration(minutes: number): string {
+  return t.time.duration(Math.max(0, Math.floor(minutes)));
+}
+
+/** Local, locale-aware date and time for tables ("12.11.2026, 13:20"). "—" for garbage. */
+export function formatDateTime(iso: string | null): string {
+  if (!iso) return DASH;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? DASH : d.toLocaleString("uk-UA", { dateStyle: "short", timeStyle: "short" });
+}
