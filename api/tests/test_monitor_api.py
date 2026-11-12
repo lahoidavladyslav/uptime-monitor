@@ -161,3 +161,124 @@ def test_read_endpoints_use_a_constant_number_of_queries(auth_client, mon, djang
     for suffix in ("", "/stats?period=7d", "/series?period=7d", "/checks?page_size=50", "/incidents"):
         with django_assert_max_num_queries(8):
             assert auth_client.get(f"/api/v1/monitors/{mon.pk}{suffix}").status_code == 200
+
+
+# ======================= actions =======================
+@pytest.fixture
+def queued(monkeypatch):
+    calls = {"check": [], "ssl": []}
+    monkeypatch.setattr(
+        "api.routers.monitors.check_monitor.delay", lambda pk, force=False: calls["check"].append((pk, force))
+    )
+    monkeypatch.setattr("api.routers.monitors.check_ssl.delay", lambda pk: calls["ssl"].append(pk))
+    return calls
+
+
+def post(client, path, data=None):
+    return client.post(f"/api/v1/monitors{path}", data or {}, content_type="application/json")
+
+
+def test_check_now_queues_one_forced_check(auth_client, mon, queued):
+    r = post(auth_client, f"/{mon.pk}/check")
+    assert r.status_code == 202 and r.json() == {"status": "queued"}
+    assert queued["check"] == [(mon.pk, True)] and queued["ssl"] == [mon.pk]  # https -> SSL refresh too
+
+
+def test_check_now_skips_ssl_for_plain_http(auth_client, user, queued):
+    m = Monitor.objects.create(user=user, name="Plain", url="http://plain.example.com")
+    post(auth_client, f"/{m.pk}/check")
+    assert queued["check"] == [(m.pk, True)] and queued["ssl"] == []
+
+
+def test_a_second_click_inside_the_cooldown_is_429_and_queues_nothing(auth_client, mon, queued):
+    assert post(auth_client, f"/{mon.pk}/check").status_code == 202
+    r = post(auth_client, f"/{mon.pk}/check")
+    assert r.status_code == 429 and r.json()["message"] and len(queued["check"]) == 1
+
+
+def test_check_now_during_maintenance_is_409(auth_client, mon, queued):
+    now = timezone.now()
+    MaintenanceWindow.objects.create(monitor=mon, starts_at=now - timedelta(hours=1), ends_at=now + timedelta(hours=1))
+    r = post(auth_client, f"/{mon.pk}/check")
+    assert r.status_code == 409 and queued["check"] == []
+
+
+def test_check_now_on_a_foreign_monitor_is_404_and_queues_nothing(auth_client, foreign, queued):
+    assert post(auth_client, f"/{foreign.pk}/check").status_code == 404 and queued["check"] == []
+
+
+def test_check_now_requires_login(client, mon, queued):
+    assert post(client, f"/{mon.pk}/check").status_code == 401 and queued["check"] == []
+
+
+# ---------------- maintenance ----------------
+def window(start_h=1, end_h=3, reason="Оновлення"):
+    now = timezone.now()
+    return {
+        "starts_at": (now + timedelta(hours=start_h)).isoformat(),
+        "ends_at": (now + timedelta(hours=end_h)).isoformat(),
+        "reason": reason,
+    }
+
+
+def test_create_maintenance_window_then_list_it(auth_client, mon):
+    r = post(auth_client, f"/{mon.pk}/maintenance", window())
+    assert r.status_code == 201 and r.json()["reason"] == "Оновлення"
+    listed = auth_client.get(f"/api/v1/monitors/{mon.pk}/maintenance").json()
+    assert [w["id"] for w in listed] == [r.json()["id"]]
+
+
+def test_finished_windows_are_not_listed(auth_client, mon):
+    now = timezone.now()
+    MaintenanceWindow.objects.create(monitor=mon, starts_at=now - timedelta(hours=3), ends_at=now - timedelta(hours=1))
+    assert auth_client.get(f"/api/v1/monitors/{mon.pk}/maintenance").json() == []
+
+
+@pytest.mark.parametrize(
+    "start_h,end_h,fragment",
+    [(3, 1, "пізніше"), (-5, -2, "минуло"), (1, 24 * 31 + 2, "30 днів")],
+)
+def test_invalid_windows_are_422_with_the_forms_messages(auth_client, mon, start_h, end_h, fragment):
+    r = post(auth_client, f"/{mon.pk}/maintenance", window(start_h, end_h))
+    assert r.status_code == 422
+    assert fragment in " ".join(sum(r.json()["errors"].values(), []))
+    assert not mon.maintenance_windows.exists()
+
+
+def test_missing_or_garbage_dates_are_422_field_errors(auth_client, mon):
+    r = post(auth_client, f"/{mon.pk}/maintenance", {"starts_at": "not-a-date", "ends_at": "", "reason": ""})
+    assert r.status_code == 422 and {"starts_at", "ends_at"} <= set(r.json()["errors"])
+
+
+def test_delete_window(auth_client, mon):
+    w = MaintenanceWindow.objects.create(
+        monitor=mon, starts_at=timezone.now(), ends_at=timezone.now() + timedelta(hours=1)
+    )
+    r = auth_client.delete(f"/api/v1/monitors/{mon.pk}/maintenance/{w.pk}")
+    assert r.status_code == 200 and not MaintenanceWindow.objects.filter(pk=w.pk).exists()
+
+
+def test_window_of_another_monitor_or_user_cannot_be_deleted(auth_client, user, mon, foreign):
+    mine_other = Monitor.objects.create(user=user, name="Other", url="https://other.example.com")
+    theirs = MaintenanceWindow.objects.create(
+        monitor=foreign, starts_at=timezone.now(), ends_at=timezone.now() + timedelta(hours=1)
+    )
+    cross = MaintenanceWindow.objects.create(
+        monitor=mine_other, starts_at=timezone.now(), ends_at=timezone.now() + timedelta(hours=1)
+    )
+    assert auth_client.delete(f"/api/v1/monitors/{mon.pk}/maintenance/{theirs.pk}").status_code == 404
+    assert auth_client.delete(f"/api/v1/monitors/{foreign.pk}/maintenance/{theirs.pk}").status_code == 404
+    assert auth_client.delete(f"/api/v1/monitors/{mon.pk}/maintenance/{cross.pk}").status_code == 404  # wrong monitor
+    assert MaintenanceWindow.objects.count() == 2
+
+
+def test_unsafe_methods_enforce_csrf(user, mon):
+    from django.test import Client
+
+    strict = Client(enforce_csrf_checks=True)
+    strict.force_login(user)
+    assert strict.post(f"/api/v1/monitors/{mon.pk}/check", content_type="application/json").status_code == 403
+    assert (
+        strict.post(f"/api/v1/monitors/{mon.pk}/maintenance", window(), content_type="application/json").status_code
+        == 403
+    )

@@ -225,6 +225,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/monitors/{monitor_id}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue an immediate check ("check now") */
+        post: operations["api_routers_monitors_check_now"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/monitors/{monitor_id}/checks": {
         parameters: {
             query?: never;
@@ -269,8 +286,26 @@ export interface paths {
         /** Active and upcoming windows */
         get: operations["api_routers_monitors_maintenance"];
         put?: never;
-        post?: never;
+        /** Schedule a maintenance window */
+        post: operations["api_routers_monitors_create_maintenance"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/monitors/{monitor_id}/maintenance/{window_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a maintenance window */
+        delete: operations["api_routers_monitors_delete_maintenance"];
         options?: never;
         head?: never;
         patch?: never;
@@ -415,6 +450,18 @@ export interface components {
             password: string;
             /** Username */
             username: string;
+        };
+        /** MaintenanceIn */
+        MaintenanceIn: {
+            /** Ends At */
+            ends_at: string;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Starts At */
+            starts_at: string;
         };
         /** MaintenanceOut */
         MaintenanceOut: {
@@ -872,6 +919,28 @@ export interface operations {
             };
         };
     };
+    api_routers_monitors_check_now: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitor_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatusOut"];
+                };
+            };
+        };
+    };
     api_routers_monitors_checks: {
         parameters: {
             query?: {
@@ -938,6 +1007,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MaintenanceOut"][];
+                };
+            };
+        };
+    };
+    api_routers_monitors_create_maintenance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitor_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaintenanceIn"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceOut"];
+                };
+            };
+        };
+    };
+    api_routers_monitors_delete_maintenance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitor_id: number;
+                window_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatusOut"];
                 };
             };
         };

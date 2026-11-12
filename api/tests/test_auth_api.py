@@ -225,10 +225,15 @@ def test_password_reset_confirm_weak_password_and_bad_link(ac, user):
 
 
 # ---------------- CSRF guard for every POST ----------------
-def test_every_post_endpoint_rejects_requests_without_csrf(ac, user):
-    """Guards against a future route forgetting enforce_csrf()."""
-    posts = [p for p, ops in api.get_openapi_schema()["paths"].items() if "post" in ops]
-    assert len(posts) == 8
-    for path in posts:
-        r = Client(enforce_csrf_checks=True).post(path, {}, content_type="application/json")
-        assert r.status_code == 403, f"{path} accepted a POST without a CSRF token"
+def test_every_unsafe_endpoint_rejects_requests_without_csrf(ac, user):
+    """Guards against a future route forgetting CSRF enforcement (POST, PUT, PATCH, DELETE alike)."""
+    unsafe = [
+        (method, path.replace("{monitor_id}", "1").replace("{window_id}", "1"))
+        for path, ops in api.get_openapi_schema()["paths"].items()
+        for method in ops
+        if method in ("post", "put", "patch", "delete")
+    ]
+    assert len(unsafe) >= 10  # a silently empty list would make this guard vacuous
+    for method, path in unsafe:
+        r = getattr(Client(enforce_csrf_checks=True), method)(path, {}, content_type="application/json")
+        assert r.status_code == 403, f"{method.upper()} {path} accepted a request without a CSRF token"
