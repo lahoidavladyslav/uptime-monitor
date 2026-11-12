@@ -4,6 +4,7 @@ x-app: &app
     DATABASE_URL: postgres://uptime:uptime@db:5432/uptime
     REDIS_URL: redis://redis:6379/0
     MEDIA_ROOT: /app/media
+    FRONTEND_URL: http://localhost:5173   # where emails link to (the SPA)
     DEBUG: "1"
   volumes:
     - .:/app
@@ -27,6 +28,16 @@ services:
     <<: *app
     command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
     ports: ["8000:8000"]
+  frontend:        # the SPA (Vite dev server); /api is proxied to web, so the browser sees ONE origin
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    environment:
+      API_PROXY: http://web:8000
+    ports: ["5173:5173"]
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
   worker:          # the check loop
     <<: *app
     command: celery -A config worker -Q checks -c 4 -n checks@%h -l info

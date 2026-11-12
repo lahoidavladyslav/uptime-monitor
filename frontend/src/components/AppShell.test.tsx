@@ -11,7 +11,7 @@ function setup(onLogout = vi.fn()) {
   window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener() {}, removeEventListener() {} }) as never;
   render(
     <ThemeProvider>
-      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter>
         <AppShell username="alice" onLogout={onLogout}>
           <p>content</p>
         </AppShell>

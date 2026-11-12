@@ -224,6 +224,27 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 перезаписує). Партиціювання `CheckResult` не робив: з очищенням за 30 днів і агрегатами
 таблиця обмежена, а партиції варто додавати, коли виміри покажуть потребу.
 
+## Frontend (SPA, `frontend/`)
+
+React 18 + TypeScript + Vite + Tailwind; говорить з `/api/v1/` сесійними cookie + CSRF (один origin,
+без CORS). Старий Django-інтерфейс на `:8000` лишається робочим.
+
+```bash
+docker compose up -d --build        # frontend на http://localhost:5173 (проксі /api -> web)
+# або локально:
+cd frontend && npm ci && npm run dev    # потрібен бекенд на :8000
+npm test -- --run                        # Vitest + Testing Library + MSW
+npm run lint && npm run typecheck && npm run build
+```
+
+**Контракт не може розійтися.** Типи `src/api/schema.d.ts` генеруються з `api/openapi.json`
+(`npm run gen:api`). Змінили API → `python manage.py export_openapi` → `npm run gen:api` → коміт обох файлів.
+CI падає, якщо знімок або типи застарілі (`export_openapi --check`, `git diff --exit-code`).
+
+Етап 1 реалізовано: вхід (з 2FA), реєстрація, підтвердження email, скидання пароля, дашборд.
+Решта екранів (сторінка монітора, форми, статус-сторінки, звіти, безпека) — етапи 2–4, поки що заглушки.
+Версії vite/vitest/msw закріплені під Node 20 (новіші мажорні вимагають Node ≥ 22.12).
+
 ## API-контракт (для нового фронтенду)
 
 `/api/v1/` (Django Ninja) → схема на `/api/v1/openapi.json`; знімок лежить у `api/openapi.json` і

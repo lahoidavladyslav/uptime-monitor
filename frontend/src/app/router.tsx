@@ -43,15 +43,7 @@ export const routes: RouteObject[] = [
   { path: "*", element: <NotFoundPage /> },
 ];
 
-const future = {
-  v7_relativeSplatPath: true,
-  v7_fetcherPersist: true,
-  v7_normalizeFormMethod: true,
-  v7_partialHydration: true,
-  v7_skipActionErrorRevalidation: true,
-};
-
 /** Browser router for the app; pass `initialEntries` to get an in-memory router (tests). */
 export function createAppRouter(initialEntries?: string[]) {
-  return initialEntries ? createMemoryRouter(routes, { initialEntries, future }) : createBrowserRouter(routes, { future });
+  return initialEntries ? createMemoryRouter(routes, { initialEntries }) : createBrowserRouter(routes);
 }
