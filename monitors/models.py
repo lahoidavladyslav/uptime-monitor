@@ -8,6 +8,10 @@ from django.db.models import Q
 http_url_validator = URLValidator(schemes=["http", "https"])
 
 
+def _new_token():
+    return secrets.token_urlsafe(32)
+
+
 class Monitor(models.Model):
     INTERVAL_CHOICES = [(60, "1 хвилина"), (300, "5 хвилин"), (900, "15 хвилин")]
 
@@ -161,3 +165,43 @@ class HourlyStat(models.Model):
     class Meta:
         constraints = [models.UniqueConstraint(fields=["monitor", "hour"], name="uniq_hourly_monitor_hour")]
         indexes = [models.Index(fields=["hour"], name="hourly_hour_idx")]
+
+
+class Subscriber(models.Model):
+    """An email address that wants incident mails for one public status page or one public monitor.
+
+    Double opt-in: a row exists from the moment someone types the address, but it only receives mail
+    once `confirmed_at` is set by clicking the emailed link. Unconfirmed rows are purged after the link
+    expires. `unsub_token` is a permanent capability for the one-click unsubscribe link in every mail.
+    """
+
+    status_page = models.ForeignKey(
+        StatusPage, null=True, blank=True, on_delete=models.CASCADE, related_name="subscribers"
+    )
+    monitor = models.ForeignKey(Monitor, null=True, blank=True, on_delete=models.CASCADE, related_name="subscribers")
+    email = models.EmailField(max_length=254)  # stored lower-case
+    unsub_token = models.CharField(max_length=64, unique=True, default=_new_token)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    confirmation_sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(status_page__isnull=False, monitor__isnull=True)
+                | Q(status_page__isnull=True, monitor__isnull=False),
+                name="subscriber_exactly_one_target",
+            ),
+            models.UniqueConstraint(
+                fields=["status_page", "email"],
+                condition=Q(status_page__isnull=False),
+                name="uniq_subscriber_page_email",
+            ),
+            models.UniqueConstraint(
+                fields=["monitor", "email"], condition=Q(monitor__isnull=False), name="uniq_subscriber_monitor_email"
+            ),
+        ]
+
+    @property
+    def is_confirmed(self):
+        return self.confirmed_at is not None

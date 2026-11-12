@@ -1,0 +1,5 @@
+{% extends "monitors/_plain_public.html" %}
+{% block body %}
+<h1 class="h4">Відписатися від сповіщень?</h1>
+<form method="post">{% csrf_token %}<button class="btn btn-danger">Так, відписатися</button></form>
+{% endblock %}

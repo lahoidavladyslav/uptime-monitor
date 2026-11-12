@@ -34,6 +34,6 @@
       <div class="text-muted">{{ i.started_at|date:"Y-m-d H:i" }} UTC</div>
     </div>
   {% empty %}<p class="text-muted small">Інцидентів не було.</p>{% endfor %}
-  <p class="small mt-4"><a href="{{ feed_url }}">Підписатися на оновлення (Atom)</a></p>
+  <p class="small mt-4"><a href="{{ subscribe_url }}">Сповіщення на email</a> · <a href="{{ feed_url }}">Atom</a></p>
 </main></body>
 </html>

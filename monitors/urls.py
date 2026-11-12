@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import ops, public, views
+from . import ops, public, subscribe_views, views
 
 urlpatterns = [
     path("healthz/", ops.healthz, name="healthz"),
@@ -24,5 +24,9 @@ urlpatterns = [
     path("status/<slug:slug>/", public.monitor_status, name="public_status"),
     path("status/<slug:slug>/feed/", public.monitor_feed, name="monitor_feed"),
     path("page/<slug:slug>/", public.group_status, name="group_status"),
+    path("status/<slug:slug>/subscribe/", subscribe_views.monitor_subscribe, name="monitor_subscribe"),
+    path("page/<slug:slug>/subscribe/", subscribe_views.group_subscribe, name="group_subscribe"),
+    path("subscribe/confirm/<str:token>/", subscribe_views.confirm_subscription, name="subscription_confirm"),
+    path("unsubscribe/<str:token>/", subscribe_views.unsubscribe, name="unsubscribe"),
     path("page/<slug:slug>/feed/", public.group_feed, name="group_feed"),
 ]

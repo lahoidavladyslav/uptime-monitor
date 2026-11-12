@@ -1,0 +1,10 @@
+{% extends "monitors/_plain_public.html" %}
+{% block body %}
+<h1 class="h4">Email-сповіщення: {{ title }}</h1>
+<p class="text-muted">Ми напишемо, коли станеться збій і коли все відновиться. Спершу надішлемо лист для підтвердження.</p>
+<form method="post">{% csrf_token %}
+  {{ form.as_p }}
+  <button class="btn btn-primary">Підписатися</button>
+  <a class="btn btn-link" href="{{ back_url }}">Назад</a>
+</form>
+{% endblock %}

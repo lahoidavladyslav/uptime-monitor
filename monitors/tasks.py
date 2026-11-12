@@ -6,14 +6,16 @@ from smtplib import SMTPException
 import requests
 from celery import shared_task
 from django.conf import settings
-from django.core.mail import send_mail
+from django.core.mail import EmailMessage, send_mail
 from django.db import IntegrityError, transaction
 from django.db.models import DateTimeField, DurationField, Exists, ExpressionWrapper, F, OuterRef, Q, Value
+from django.urls import reverse
 from django.utils import timezone
 
+from . import subscriptions
 from .checks import MAX_BODY_BYTES, evaluate
 from .http_client import guarded_session
-from .models import CheckResult, HourlyStat, Incident, MaintenanceWindow, Monitor
+from .models import CheckResult, HourlyStat, Incident, MaintenanceWindow, Monitor, Subscriber
 from .security import blocked_reason
 
 logger = logging.getLogger(__name__)
@@ -116,12 +118,18 @@ def update_incident(monitor, result):
                 )
         except IntegrityError:
             return
-        transaction.on_commit(lambda: send_incident_notification.delay(incident.pk, "opened"))
+        transaction.on_commit(lambda: _notify_everyone(incident.pk, "opened"))
     elif result.is_up and open_incident is not None:
         open_incident.resolved_at = result.checked_at
         open_incident.save(update_fields=["resolved_at"])
         incident_id = open_incident.pk
-        transaction.on_commit(lambda: send_incident_notification.delay(incident_id, "resolved"))
+        transaction.on_commit(lambda: _notify_everyone(incident_id, "resolved"))
+
+
+def _notify_everyone(incident_id, kind):
+    """The owner (private details) and the public subscribers (public details only)."""
+    send_incident_notification.delay(incident_id, kind)
+    notify_subscribers.delay(incident_id, kind)
 
 
 def claim_monitor(monitor_id, force):
@@ -214,6 +222,85 @@ def send_incident_notification(incident_id, kind):
         return "no-email"
     send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [email])
     return "sent"
+
+
+# ----------------------------- public subscribers -----------------------------
+_RETRY = dict(
+    autoretry_for=(SMTPException, OSError), retry_backoff=True, retry_backoff_max=600, retry_jitter=True, max_retries=3
+)
+
+
+@shared_task
+def notify_subscribers(incident_id, kind):
+    """Fan out one task per recipient, so a failing address can't hold up or duplicate the others."""
+    incident = Incident.objects.select_related("monitor").filter(pk=incident_id).first()
+    if incident is None:
+        return "gone"
+    queued = 0
+    for sub in subscriptions.recipients_for(incident):
+        try:
+            send_subscriber_email.delay(sub.pk, incident_id, kind)
+            queued += 1
+        except Exception:
+            logger.exception("could not queue subscriber mail", extra={"subscriber_id": sub.pk})
+    return queued
+
+
+@shared_task(**_RETRY)
+def send_subscriber_email(subscriber_id, incident_id, kind):
+    """Public-safe content only: the public name, never the monitored URL or the error text."""
+    sub = Subscriber.objects.select_related("status_page", "monitor").filter(pk=subscriber_id).first()
+    incident = Incident.objects.select_related("monitor").filter(pk=incident_id).first()
+    if sub is None or incident is None or not sub.is_confirmed:
+        return "gone"
+    name = incident.monitor.public_name
+    if kind == "opened":
+        subject = f"🔴 {name} недоступний"
+        text = f"«{name}» недоступний з {incident.started_at:%Y-%m-%d %H:%M} UTC."
+    else:
+        subject = f"🟢 {name} знову працює"
+        text = f"«{name}» відновився о {incident.resolved_at:%Y-%m-%d %H:%M} UTC. Простій: {incident.resolved_at - incident.started_at}."
+    page_path = (
+        reverse("group_status", args=[sub.status_page.slug])
+        if sub.status_page_id
+        else reverse("public_status", args=[sub.monitor.public_slug])
+    )
+    unsub = subscriptions.unsubscribe_url(sub)
+    body = f"{text}\n\nСтатус: {subscriptions.absolute(page_path)}\n\nВідписатися: {unsub}"
+    EmailMessage(
+        subject,
+        body,
+        settings.DEFAULT_FROM_EMAIL,
+        [sub.email],
+        headers={"List-Unsubscribe": f"<{unsub}>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"},
+    ).send()
+    logger.info("subscriber mail sent", extra={"event": "subscriber_mail_sent", "subscriber_id": sub.pk, "kind": kind})
+    return "sent"
+
+
+@shared_task(**_RETRY)
+def send_subscription_confirmation(subscriber_id):
+    sub = Subscriber.objects.select_related("status_page", "monitor").filter(pk=subscriber_id).first()
+    if sub is None or sub.is_confirmed:
+        return "skipped"
+    title = sub.status_page.title if sub.status_page_id else sub.monitor.public_name
+    send_mail(
+        f"Підтвердіть підписку: {title}",
+        f"Ви (або хтось інший) попросили надсилати сповіщення про збої «{title}» на цю адресу.\n\n"
+        f"Підтвердити підписку (діє 3 дні): {subscriptions.confirm_url(sub)}\n\n"
+        "Якщо це були не ви — просто проігноруйте цей лист, нічого не буде надіслано.",
+        settings.DEFAULT_FROM_EMAIL,
+        [sub.email],
+    )
+    return "sent"
+
+
+@shared_task
+def cleanup_unconfirmed_subscribers():
+    """Pending rows whose confirmation link has expired (they can never be confirmed any more)."""
+    cutoff = timezone.now() - timedelta(seconds=subscriptions.CONFIRM_MAX_AGE)
+    deleted, _ = Subscriber.objects.filter(confirmed_at__isnull=True, created_at__lt=cutoff).delete()
+    return deleted
 
 
 @shared_task

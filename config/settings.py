@@ -111,6 +111,9 @@ EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.conso
 DEFAULT_FROM_EMAIL = "uptime@example.com"
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")  # where the SPA lives (links in emails)
+# Where the Django-rendered pages (public status pages, subscription links) are reachable from outside.
+# In production nginx serves both on one origin, so it defaults to FRONTEND_URL there.
+SITE_URL = os.environ.get("SITE_URL", FRONTEND_URL if PRODUCTION else "http://localhost:8000").rstrip("/")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 CACHES = {
     "default": {
@@ -136,6 +139,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "monitors.tasks.schedule_ssl_checks",
         "schedule": crontab(hour=4, minute=0),
     },
+    "cleanup-unconfirmed-subscribers": {
+        "task": "monitors.tasks.cleanup_unconfirmed_subscribers",
+        "schedule": crontab(hour=3, minute=15),
+    },
     "cleanup-login-events": {
         "task": "accounts.tasks.cleanup_login_events",
         "schedule": crontab(hour=3, minute=30),
@@ -155,6 +162,9 @@ CHECK_RETENTION_DAYS = 30
 ROLLUP_RETENTION_DAYS = 400
 CLEANUP_BATCH_SIZE = 5000
 LOGIN_EVENT_RETENTION_DAYS = 90
+SUBSCRIBE_LIMIT_PER_HOUR = 10  # per client IP
+SUBSCRIBE_RESEND_COOLDOWN_MINUTES = 10  # per address
+MAX_SUBSCRIBERS_PER_TARGET = 5000
 LOGIN_EVENTS_SHOWN = 50
 PUBLIC_STATUS_CACHE_SECONDS = 60
 
@@ -164,6 +174,9 @@ CELERY_TASK_DEFAULT_QUEUE = "checks"
 CELERY_TASK_ROUTES = {
     "monitors.tasks.send_incident_notification": {"queue": "notifications"},
     "monitors.tasks.send_ssl_alert": {"queue": "notifications"},
+    "monitors.tasks.notify_subscribers": {"queue": "notifications"},
+    "monitors.tasks.send_subscriber_email": {"queue": "notifications"},
+    "monitors.tasks.send_subscription_confirmation": {"queue": "notifications"},
     "reports.tasks.generate_report": {"queue": "reports"},
 }
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # don't let one worker hoard long jobs

@@ -88,6 +88,7 @@ def monitor_status(request, slug):
                 "single": cards[0],
                 "history": public_incident_history([monitor.pk]),
                 "feed_url": reverse("monitor_feed", args=[slug]),
+                "subscribe_url": reverse("monitor_subscribe", args=[slug]),
             },
             request,
         )
@@ -114,6 +115,7 @@ def group_status(request, slug):
                 "overall": _overall(cards),
                 "history": public_incident_history([m.pk for m in monitors]),
                 "feed_url": reverse("group_feed", args=[slug]),
+                "subscribe_url": reverse("group_subscribe", args=[slug]),
             },
             request,
         )
