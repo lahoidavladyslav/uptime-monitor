@@ -144,9 +144,9 @@ CELERY_BEAT_SCHEDULE = {
         "task": "monitors.tasks.schedule_checks",
         "schedule": 60.0,
     },
-    "rollup-hourly": {
-        "task": "monitors.tasks.rollup_hourly",
-        "schedule": crontab(minute=5),
+    "build-rollups": {
+        "task": "monitors.tasks.build_rollups",
+        "schedule": crontab(minute="*/5"),
     },
     "ssl-expiry-checks": {
         "task": "monitors.tasks.schedule_ssl_checks",
@@ -171,8 +171,8 @@ ALLOW_PRIVATE_TARGETS = os.environ.get("ALLOW_PRIVATE_TARGETS", "0") == "1"
 CHECK_NOW_COOLDOWN_SECONDS = 10
 MAX_IN_PROGRESS_REPORTS = 3
 CHECK_TIMEOUT_SECONDS = 10
-CHECK_RETENTION_DAYS = 30
-ROLLUP_RETENTION_DAYS = 400
+CHECK_RETENTION_DAYS = 7  # raw checks; everything older is served from the hourly rollups
+ROLLUP_RETENTION_DAYS = 365
 CLEANUP_BATCH_SIZE = 5000
 LOGIN_EVENT_RETENTION_DAYS = 90
 SUBSCRIBE_LIMIT_PER_HOUR = 10  # per client IP

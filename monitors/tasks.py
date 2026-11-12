@@ -12,10 +12,10 @@ from django.db.models import DateTimeField, DurationField, Exists, ExpressionWra
 from django.urls import reverse
 from django.utils import timezone
 
-from . import subscriptions
+from . import rollups, subscriptions
 from .checks import MAX_BODY_BYTES, evaluate
 from .http_client import guarded_session
-from .models import CheckResult, HourlyStat, Incident, MaintenanceWindow, Monitor, Subscriber
+from .models import CheckResult, CheckRollupHourly, Incident, MaintenanceWindow, Monitor, Subscriber
 from .security import blocked_reason
 
 logger = logging.getLogger(__name__)
@@ -305,8 +305,12 @@ def cleanup_unconfirmed_subscribers():
 
 @shared_task
 def cleanup_old_checks():
-    """Delete in batches so we never hold one giant transaction / table lock."""
-    cutoff = timezone.now() - timedelta(days=settings.CHECK_RETENTION_DAYS)
+    """Delete in batches so we never hold one giant transaction / table lock.
+
+    The cutoff is hour-aligned: a half-deleted hour could later be "rebuilt" from the rest of its raw rows
+    into a wrong rollup, so an hour is either wholly kept or wholly gone.
+    """
+    cutoff = rollups.floor_hour(timezone.now() - timedelta(days=settings.CHECK_RETENTION_DAYS))
     total = 0
     while True:
         ids = list(
@@ -318,7 +322,7 @@ def cleanup_old_checks():
             break
         deleted, _ = CheckResult.objects.filter(pk__in=ids).delete()
         total += deleted
-    HourlyStat.objects.filter(hour__lt=timezone.now() - timedelta(days=settings.ROLLUP_RETENTION_DAYS)).delete()
+    CheckRollupHourly.objects.filter(hour__lt=timezone.now() - timedelta(days=settings.ROLLUP_RETENTION_DAYS)).delete()
     return total
 
 
@@ -428,51 +432,14 @@ def send_ssl_alert(monitor_id, days_left):
 
 
 # ----------------------------- hourly rollups -----------------------------
-ROLLUP_RECOMPUTE_HOURS = 3  # the current hour is still filling; late rows land in the last few
-
-
 def rollup_range(start, end):
-    """(Re)compute HourlyStat rows for [start, end) in one aggregate query + one upsert.
-
-    Idempotent: running it twice gives the same rows. `start` must be hour-aligned.
-    """
-    from django.db.models import Count, Sum
-    from django.db.models.functions import TruncHour
-
-    rows = (
-        CheckResult.objects.filter(checked_at__gte=start, checked_at__lt=end)
-        .annotate(hour=TruncHour("checked_at"))
-        .values("monitor_id", "hour")
-        .annotate(
-            total=Count("id"),
-            up=Count("id", filter=Q(is_up=True)),
-            rt_sum=Sum("response_time_ms"),
-            rt_count=Count("response_time_ms"),
-        )
-    )
-    stats = [
-        HourlyStat(
-            monitor_id=r["monitor_id"],
-            hour=r["hour"],
-            total=r["total"],
-            up=r["up"],
-            rt_sum=r["rt_sum"] or 0,
-            rt_count=r["rt_count"],
-        )
-        for r in rows
-    ]
-    HourlyStat.objects.bulk_create(
-        stats,
-        batch_size=2000,
-        update_conflicts=True,
-        unique_fields=["monitor", "hour"],
-        update_fields=["total", "up", "rt_sum", "rt_count"],
-    )
-    return len(stats)
+    """Recompute rollup rows for [start, end). Thin wrapper kept for callers and tests."""
+    return rollups.build(start, end)
 
 
 @shared_task
-def rollup_hourly():
-    end = timezone.now()
-    start = (end - timedelta(hours=ROLLUP_RECOMPUTE_HOURS)).replace(minute=0, second=0, microsecond=0)
-    return rollup_range(start, end)
+def build_rollups():
+    """Every 5 minutes: recompute the previous and the current hour (a result that arrives late still has
+    its own hour open), with a single INSERT ... ON CONFLICT DO UPDATE."""
+    now = timezone.now()
+    return rollups.build(rollups.floor_hour(now) - timedelta(hours=1), now + timedelta(seconds=1))

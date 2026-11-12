@@ -1,6 +1,7 @@
 import json
 from datetime import timedelta
 
+from django.core.management import call_command
 from django.urls import reverse
 from django.utils import timezone
 
@@ -27,12 +28,13 @@ def test_series_24h_raw_points_ordered_with_gap_for_failure(monitor):
     assert [(p["ms"], p["down"]) for p in pts] == [(200, False), (None, True), (100, False)]
 
 
-def test_series_7d_is_bucketed_hourly_in_one_query(monitor, django_assert_num_queries):
+def test_series_7d_is_bucketed_hourly_in_two_queries(monitor, django_assert_num_queries):
     base = 60 * 24 * 2  # two days ago, so the points sit in whole, fixed hours
     for i in range(30):  # 30 checks within ~1h => at most 2 hourly buckets
         add(monitor, base + i, 100 + i)
     add(monitor, base + 5, None, up=False)
-    with django_assert_num_queries(1):
+    call_command("backfill_rollups")  # 7d points come from the hourly rollups (+ the raw tail)
+    with django_assert_num_queries(2):  # rollup rows + raw tail, regardless of how many checks exist
         pts = response_time_series(monitor, "7d")
     assert 1 <= len(pts) <= 2
     assert any(p["down"] for p in pts)

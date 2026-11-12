@@ -148,19 +148,24 @@ class StatusPage(models.Model):
         return self.title
 
 
-class HourlyStat(models.Model):
-    """Per-monitor, per-hour rollup of CheckResult.
+class CheckRollupHourly(models.Model):
+    """Per-monitor, per-UTC-hour rollup of CheckResult (built every 5 minutes by `build_rollups`).
 
-    Raw checks are deleted after 30 days; these rows are ~1/60th the size and let the UI
-    show long-term uptime (90 days, a year) without keeping the raw data.
+    Raw checks live 7 days; these rows are ~1/60th the size, live a year, and are the source for every
+    window longer than a day (7d stats, public page, reports, 30/90d uptime).
+
+    Averages are stored as SUM and COUNT, never as a mean (a mean of hourly means is wrong when hours hold
+    different numbers of checks). `response_count` is not `checks_total`: failed checks carry no timing.
     """
 
-    monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE, related_name="hourly_stats")
-    hour = models.DateTimeField()
-    total = models.PositiveIntegerField()
-    up = models.PositiveIntegerField()
-    rt_sum = models.BigIntegerField(default=0)  # sum of response_time_ms over rt_count checks
-    rt_count = models.PositiveIntegerField(default=0)
+    monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE, related_name="rollups")
+    hour = models.DateTimeField()  # UTC, truncated to the hour
+    checks_total = models.PositiveIntegerField()
+    checks_up = models.PositiveIntegerField()
+    sum_response_ms = models.BigIntegerField(default=0)
+    response_count = models.PositiveIntegerField(default=0)  # checks that have a response time
+    min_response_ms = models.PositiveIntegerField(null=True, blank=True)
+    max_response_ms = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["monitor", "hour"], name="uniq_hourly_monitor_hour")]

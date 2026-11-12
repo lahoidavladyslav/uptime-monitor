@@ -110,6 +110,7 @@ class ChecksQuery(Schema):
 def detail(request, monitor_id: int):
     m = owned(request, monitor_id)
     now = timezone.now()
+    windows = services.uptime_windows(m)
     return {
         "id": m.pk,
         "name": m.name,
@@ -122,9 +123,9 @@ def detail(request, monitor_id: int):
         "down_minutes": int((now - m.down_since).total_seconds() // 60) if m.down_since else None,
         "uptime": {
             "h24": services.uptime_percent(m.checks_24h, m.up_24h),
-            "d7": services.monitor_stats(m, "7d")["uptime"],
-            "d30": services.long_term_uptime(m, 30),
-            "d90": services.long_term_uptime(m, 90),
+            "d7": windows[7],
+            "d30": windows[30],
+            "d90": windows[90],
         },
     }
 

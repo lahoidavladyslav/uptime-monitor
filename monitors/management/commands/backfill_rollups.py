@@ -1,61 +1,43 @@
-from datetime import timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from monitors.models import CheckResult, HourlyStat
-from monitors.tasks import rollup_range
+from monitors import rollups
+from monitors.models import CheckResult
+
+
+def parse_day(value):
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise CommandError(f"{value!r} is not a date (use YYYY-MM-DD)") from exc
 
 
 class Command(BaseCommand):
-    help = "Create hourly rollups for existing raw checks. Never overwrites rows that already exist."
+    help = (
+        "Rebuild hourly rollups from raw checks for [--from, --to] (UTC days, inclusive), one day per statement. "
+        "Existing rows are overwritten; hours whose raw rows were already cleaned up are left untouched."
+    )
 
-    def handle(self, *args, **options):
-        first = CheckResult.objects.order_by("checked_at").values_list("checked_at", flat=True).first()
-        if first is None:
-            self.stdout.write("No checks, nothing to do.")
+    def add_arguments(self, parser):
+        parser.add_argument("--from", dest="start", help="first day, YYYY-MM-DD (default: oldest raw check)")
+        parser.add_argument("--to", dest="end", help="last day, inclusive, YYYY-MM-DD (default: today)")
+
+    def handle(self, *args, start=None, end=None, **options):
+        first_day = parse_day(start) if start else None
+        last = parse_day(end) if end else timezone.now().astimezone(UTC).date()
+        if first_day and first_day > last:
+            raise CommandError(f"--from {first_day} is after --to {last}")
+        first_raw = CheckResult.objects.order_by("checked_at").values_list("checked_at", flat=True).first()
+        if first_raw is None:
+            self.stdout.write("No raw checks, nothing to do.")
             return
-        start = first.replace(minute=0, second=0, microsecond=0)
-        end = timezone.now().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        existing = set(HourlyStat.objects.values_list("monitor_id", "hour"))
-        # Day-sized chunks keep each aggregate query small.
+        first = first_day or first_raw.astimezone(UTC).date()
         total = 0
-        cursor = start
-        while cursor < end:
-            chunk_end = min(cursor + timedelta(days=1), end)
-            total += (
-                rollup_range(cursor, chunk_end) if not existing else self._missing_only(cursor, chunk_end, existing)
-            )
-            cursor = chunk_end
-        self.stdout.write(self.style.SUCCESS(f"Rolled up {total} monitor-hours."))
-
-    def _missing_only(self, start, end, existing):
-        """Insert hours that have no rollup yet; leave existing ones (they may be 'older than raw data')."""
-        from django.db.models import Count, Q, Sum
-        from django.db.models.functions import TruncHour
-
-        rows = (
-            CheckResult.objects.filter(checked_at__gte=start, checked_at__lt=end)
-            .annotate(hour=TruncHour("checked_at"))
-            .values("monitor_id", "hour")
-            .annotate(
-                total=Count("id"),
-                up=Count("id", filter=Q(is_up=True)),
-                rt_sum=Sum("response_time_ms"),
-                rt_count=Count("response_time_ms"),
-            )
-        )
-        new = [
-            HourlyStat(
-                monitor_id=r["monitor_id"],
-                hour=r["hour"],
-                total=r["total"],
-                up=r["up"],
-                rt_sum=r["rt_sum"] or 0,
-                rt_count=r["rt_count"],
-            )  # fmt: skip
-            for r in rows
-            if (r["monitor_id"], r["hour"]) not in existing
-        ]
-        HourlyStat.objects.bulk_create(new, batch_size=2000, ignore_conflicts=True)
-        return len(new)
+        day = first
+        while day <= last:  # a day per statement keeps each INSERT ... SELECT small and resumable
+            day_start = datetime.combine(day, time.min, tzinfo=UTC)
+            total += rollups.build(day_start, day_start + timedelta(days=1))
+            day += timedelta(days=1)
+        self.stdout.write(self.style.SUCCESS(f"Rebuilt {total} monitor-hours ({first} .. {last})."))

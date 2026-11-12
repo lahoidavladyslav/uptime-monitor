@@ -17,11 +17,11 @@ from .services import (
     PERIODS,
     cooldown_ok,
     dashboard_queryset,
-    long_term_uptime,
     monitor_stats,
     response_time_series,
     ssl_days_left,
     uptime_percent,
+    uptime_windows,
 )
 from .tasks import check_monitor, check_ssl
 
@@ -119,6 +119,7 @@ class MonitorDetailView(OwnedMonitorMixin, View):
             period = "24h"
         only_failed = request.GET.get("only_failed") == "1"
 
+        windows = uptime_windows(monitor, (30, 90))
         checks = monitor.checks.all()
         if only_failed:
             checks = checks.filter(is_up=False)
@@ -136,8 +137,8 @@ class MonitorDetailView(OwnedMonitorMixin, View):
                 "page": page,
                 "incidents": monitor.incidents.all()[:50],
                 "ssl_days_left": ssl_days_left(monitor),
-                "uptime_30d": long_term_uptime(monitor, 30),
-                "uptime_90d": long_term_uptime(monitor, 90),
+                "uptime_30d": windows[30],
+                "uptime_90d": windows[90],
                 "windows": monitor.maintenance_windows.filter(ends_at__gt=timezone.now()).order_by("starts_at")[:10],
                 "maintenance_form": MaintenanceForm(),
                 "in_maintenance": monitor.maintenance_windows.filter(

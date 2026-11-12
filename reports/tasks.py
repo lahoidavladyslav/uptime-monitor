@@ -4,11 +4,12 @@ from datetime import UTC, datetime, time, timedelta
 
 from celery import shared_task
 from django.core.files.base import ContentFile
-from django.db.models import Avg, Count, DurationField, ExpressionWrapper, Q, Sum, Value
+from django.db.models import Count, DurationField, ExpressionWrapper, Q, Sum, Value
 from django.db.models.functions import Coalesce, Greatest, Least
 from django.utils import timezone
 
-from monitors.models import CheckResult, Incident, Monitor
+from monitors import rollups
+from monitors.models import Incident, Monitor
 
 from .models import ReportExport
 
@@ -29,16 +30,9 @@ def build_rows(user, period_start, period_end):
     start = datetime.combine(period_start, time.min, tzinfo=UTC)
     end = datetime.combine(period_end + timedelta(days=1), time.min, tzinfo=UTC)
 
-    checks = {
-        r["monitor_id"]: r
-        for r in CheckResult.objects.filter(monitor__user=user, checked_at__gte=start, checked_at__lt=end)
-        .values("monitor_id")
-        .annotate(
-            total=Count("id"),
-            failed=Count("id", filter=Q(is_up=False)),
-            avg_ms=Avg("response_time_ms"),
-        )
-    }
+    monitors = list(Monitor.objects.filter(user=user).order_by("name", "id"))
+    # Hourly rollups for everything old (raw checks only live 7 days) plus raw for the last 1-2 hours.
+    aggs = rollups.aggregate([m.pk for m in monitors], start, end)
 
     # Incidents overlapping the period; downtime is clipped to the period.
     clipped_end = Least(Coalesce("resolved_at", Value(timezone.now())), Value(end))
@@ -54,18 +48,16 @@ def build_rows(user, period_start, period_end):
         )
     }
 
-    for m in Monitor.objects.filter(user=user).order_by("name", "id"):
-        c = checks.get(m.pk)
+    for m in monitors:
+        a = aggs[m.pk]
         i = incidents.get(m.pk)
-        total = c["total"] if c else 0
-        failed = c["failed"] if c else 0
         yield [
             m.name,
             m.url,
-            total,
-            failed,
-            round((total - failed) * 100 / total, 2) if total else "",
-            round(c["avg_ms"]) if c and c["avg_ms"] is not None else "",
+            a.total,
+            a.down,
+            a.uptime if a.total else "",
+            a.avg_ms if a.avg_ms is not None else "",
             i["n"] if i else 0,
             round(i["downtime"].total_seconds() / 60, 1) if i and i["downtime"] else 0,
         ]

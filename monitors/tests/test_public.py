@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.core.management import call_command
 from django.urls import reverse
 from django.utils import timezone
 
@@ -54,7 +55,7 @@ def test_page_is_cached(client, monitor, django_assert_num_queries):
         assert client.get(url).status_code == 200
 
 
-def test_daily_bar_colors_and_single_query(monitor, django_assert_num_queries):
+def test_daily_bar_colors_and_constant_queries(monitor, django_assert_num_queries):
     now = timezone.now()
 
     def add(days_ago, up, down):
@@ -70,7 +71,8 @@ def test_daily_bar_colors_and_single_query(monitor, django_assert_num_queries):
     add(4, 99, 1)  # 99%   -> green (not < 99)
     add(5, 89, 11)  # 89%   -> red
     # day 6 and today (maybe): no data -> gray
-    with django_assert_num_queries(1):
+    call_command("backfill_rollups")  # old days are served from the hourly rollups
+    with django_assert_num_queries(2):  # rollup days + raw tail: constant, not one per day
         bar = daily_bar(monitor, 7)
     by_age = {(now.date() - b["day"]).days: b["color"] for b in bar}
     assert len(bar) == 7

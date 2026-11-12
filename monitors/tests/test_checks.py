@@ -4,6 +4,7 @@ import pytest
 import requests
 import responses
 import time_machine
+from django.core.management import call_command
 from django.utils import timezone
 
 from monitors.models import CheckResult, Monitor
@@ -97,6 +98,7 @@ def test_stats_percentage_and_no_data(monitor):
     s24 = monitor_stats(monitor, "24h")
     assert (s24["total"], s24["down"], s24["uptime"]) == (4, 1, 75.0)
     assert (s24["rt_avg"], s24["rt_min"], s24["rt_max"]) == (200, 100, 300)
+    call_command("backfill_rollups")  # the 3-day-old check is read from its hourly rollup
     s7 = monitor_stats(monitor, "7d")
     assert (s7["total"], s7["down"], s7["uptime"]) == (5, 2, 60.0)
 
@@ -105,8 +107,8 @@ def test_cleanup_deletes_old_in_batches(monitor, settings):
     settings.CLEANUP_BATCH_SIZE = 3
     now = timezone.now()
     for i in range(8):
-        CheckResult.objects.create(monitor=monitor, checked_at=now - timedelta(days=31 + i), is_up=True)
-    keep = CheckResult.objects.create(monitor=monitor, checked_at=now - timedelta(days=29), is_up=True)
+        CheckResult.objects.create(monitor=monitor, checked_at=now - timedelta(days=9 + i), is_up=True)
+    keep = CheckResult.objects.create(monitor=monitor, checked_at=now - timedelta(days=5), is_up=True)  # < 7d: kept
     assert cleanup_old_checks() == 8
     assert list(CheckResult.objects.all()) == [keep]
 

@@ -8,13 +8,10 @@ from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
-from django.core.management import call_command
 from django.urls import reverse
 from django.utils import timezone
 
-from monitors.models import CheckResult, HourlyStat, Incident, Monitor
-from monitors.services import long_term_uptime
-from monitors.tasks import cleanup_old_checks, rollup_hourly, rollup_range
+from monitors.models import CheckResult, CheckRollupHourly, Incident, Monitor
 from reports.models import ReportExport
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -146,69 +143,10 @@ def test_tasks_are_routed_to_separate_queues():
     assert app.conf.task_default_queue == "checks"  # check loop stays on its own queue
 
 
-# ---------------- hourly rollups ----------------
-def test_rollup_aggregates_per_monitor_hour_and_is_idempotent(monitor, user):
-    other = Monitor.objects.create(user=user, name="o", url="https://o.com")
-    base = timezone.now().replace(minute=0, second=0, microsecond=0) - timedelta(hours=2)
-    for minute, up, ms in [(1, True, 100), (2, True, 300), (3, False, None), (4, True, None)]:
-        CheckResult.objects.create(
-            monitor=monitor, checked_at=base + timedelta(minutes=minute), is_up=up, response_time_ms=ms
-        )
-    CheckResult.objects.create(monitor=other, checked_at=base + timedelta(minutes=5), is_up=True, response_time_ms=50)
-
-    rollup_range(base, base + timedelta(hours=1))
-    rollup_range(base, base + timedelta(hours=1))  # again: same result, no duplicates
-    stat = HourlyStat.objects.get(monitor=monitor, hour=base)
-    assert (stat.total, stat.up, stat.rt_sum, stat.rt_count) == (4, 3, 400, 2)
-    assert HourlyStat.objects.count() == 2
-    assert HourlyStat.objects.get(monitor=other).rt_sum == 50
-
-
-def test_rollup_hourly_task_picks_up_late_rows(monitor):
-    now = timezone.now()
-    add_check(monitor, minutes_ago=0)
-    rollup_hourly()
-    hour = now.replace(minute=0, second=0, microsecond=0)
-    assert HourlyStat.objects.get(monitor=monitor, hour=hour).total == 1
-    add_check(monitor, minutes_ago=0)
-    rollup_hourly()  # recompute, not append
-    assert HourlyStat.objects.get(monitor=monitor, hour=hour).total == 2
-
-
-def test_long_term_uptime_survives_raw_cleanup(monitor, settings):
-    settings.CLEANUP_BATCH_SIZE = 100
-    old = timezone.now().replace(minute=0, second=0, microsecond=0) - timedelta(days=45)
-    for i in range(10):
-        CheckResult.objects.create(monitor=monitor, checked_at=old + timedelta(minutes=i), is_up=i < 8)  # 80%
-    rollup_range(old, old + timedelta(hours=1))
-    assert cleanup_old_checks() == 10  # raw rows are older than 30 days -> gone
-    assert not CheckResult.objects.exists()
-    assert long_term_uptime(monitor, 90) == 80.0  # ...but the history is still there
-    assert long_term_uptime(monitor, 30) is None  # the data is older than 30d
-
-
-def test_cleanup_prunes_very_old_rollups(monitor, settings):
-    old = timezone.now() - timedelta(days=settings.ROLLUP_RETENTION_DAYS + 5)
-    HourlyStat.objects.create(monitor=monitor, hour=old, total=1, up=1)
-    fresh = HourlyStat.objects.create(monitor=monitor, hour=timezone.now() - timedelta(days=60), total=1, up=1)
-    cleanup_old_checks()
-    assert list(HourlyStat.objects.all()) == [fresh]
-
-
-def test_backfill_command_fills_gaps_without_overwriting(monitor):
-    add_check(monitor, days_ago=3)
-    add_check(monitor, days_ago=3, minutes_ago=1)
-    call_command("backfill_rollups")
-    assert HourlyStat.objects.get().total == 2
-    HourlyStat.objects.update(total=999)  # pretend this hour's raw data was already cleaned up
-    add_check(monitor, days_ago=2)
-    call_command("backfill_rollups")
-    assert sorted(HourlyStat.objects.values_list("total", flat=True)) == [1, 999]  # existing row untouched
-
-
+# ---------------- long-term uptime on the page (rollup details: test_rollups.py) ----------------
 def test_detail_page_shows_long_term_uptime(auth_client, monitor):
     hour = timezone.now().replace(minute=0, second=0, microsecond=0) - timedelta(days=5)
-    HourlyStat.objects.create(monitor=monitor, hour=hour, total=10, up=9)
+    CheckRollupHourly.objects.create(monitor=monitor, hour=hour, checks_total=10, checks_up=9)
     html = auth_client.get(reverse("monitor_detail", args=[monitor.pk])).content.decode()
     assert re.search(r"90[.,]0%", html)
 
