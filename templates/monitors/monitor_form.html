@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3">{% if object %}Редагувати монітор{% else %}Новий монітор{% endif %}</h1>
+<form method="post" class="card card-body" style="max-width:560px" novalidate>{% csrf_token %}
+  {{ form.as_p }}
+  <div class="d-flex gap-2">
+    <button class="btn btn-primary">Зберегти</button>
+    <a class="btn btn-outline-secondary" href="{% url 'dashboard' %}">Скасувати</a>
+  </div>
+</form>
+{% endblock %}

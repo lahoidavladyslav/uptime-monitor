@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block head %}<script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js"></script>{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="h3 m-0">Мої монітори</h1>
+  <a class="btn btn-primary" href="{% url 'monitor_new' %}">+ Додати</a>
+</div>
+<div id="monitor-table"
+     hx-get="{% url 'dashboard' %}"
+     hx-trigger="every 10s [document.visibilityState === 'visible']"
+     hx-swap="innerHTML">
+  {% include "monitors/_dashboard_table.html" %}
+</div>
+{% endblock %}

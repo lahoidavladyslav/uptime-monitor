@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block head %}<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-3">
+  <div>
+    <h1 class="h3 m-0">{{ monitor.name }}</h1>
+    <a href="{{ monitor.url }}" class="text-muted small" rel="noopener noreferrer">{{ monitor.url }}</a>
+    {% if monitor.is_public and monitor.public_slug %}
+      <div class="small">Публічна сторінка: <a href="{% url 'public_status' monitor.public_slug %}">/status/{{ monitor.public_slug }}/</a></div>
+    {% endif %}
+  </div>
+  <div class="d-flex gap-2">
+    <form method="post" action="{% url 'monitor_check' monitor.pk %}">{% csrf_token %}
+      <button class="btn btn-success">Перевірити зараз</button></form>
+    <a class="btn btn-outline-secondary" href="{% url 'monitor_edit' monitor.pk %}">Редагувати</a>
+    <a class="btn btn-outline-danger" href="{% url 'monitor_delete' monitor.pk %}">Видалити</a>
+  </div>
+</div>
+
+<div class="card mb-4"><div class="card-body">
+  <div class="btn-group mb-3">
+    <a class="btn btn-sm {% if period == '24h' %}btn-dark{% else %}btn-outline-dark{% endif %}" href="?period=24h">24 години</a>
+    <a class="btn btn-sm {% if period == '7d' %}btn-dark{% else %}btn-outline-dark{% endif %}" href="?period=7d">7 днів</a>
+  </div>
+  {% if stats.total == 0 %}
+    <p class="text-muted m-0">немає даних</p>
+  {% else %}
+  <div class="row text-center">
+    <div class="col"><div class="h4">{{ stats.uptime }}%</div><div class="small text-muted">uptime</div></div>
+    <div class="col"><div class="h4">{{ stats.rt_avg|default_if_none:"—" }}</div><div class="small text-muted">середній, мс</div></div>
+    <div class="col"><div class="h4">{{ stats.rt_min|default_if_none:"—" }}</div><div class="small text-muted">мін, мс</div></div>
+    <div class="col"><div class="h4">{{ stats.rt_max|default_if_none:"—" }}</div><div class="small text-muted">макс, мс</div></div>
+    <div class="col"><div class="h4">{{ stats.down }}</div><div class="small text-muted">падінь</div></div>
+  </div>
+  {% endif %}
+</div></div>
+
+<div class="card mb-4"><div class="card-body">
+  <h2 class="h5">Час відповіді ({% if period == '24h' %}останні 24 год{% else %}7 днів, середнє по годинах{% endif %})</h2>
+  {% if series %}
+    <div style="position:relative;height:260px"><canvas id="rt-chart"></canvas></div>
+    {{ series|json_script:"rt-data" }}
+    <script>
+    (function () {
+      var pts = JSON.parse(document.getElementById('rt-data').textContent);
+      new Chart(document.getElementById('rt-chart'), {
+        type: 'line',
+        data: {
+          labels: pts.map(function (p) { return p.t; }),
+          datasets: [
+            { label: 'мс', data: pts.map(function (p) { return p.ms; }), borderColor: '#0d6efd',
+              backgroundColor: 'rgba(13,110,253,.1)', pointRadius: pts.length > 200 ? 0 : 2,
+              borderWidth: 1.5, tension: .2, spanGaps: false },
+            { label: 'падіння', data: pts.map(function (p) { return p.down ? 0 : null; }), showLine: false,
+              pointStyle: 'crossRot', pointRadius: 6, borderColor: '#dc3545' }
+          ]
+        },
+        options: {
+          maintainAspectRatio: false, animation: false,
+          scales: { y: { beginAtZero: true, title: { display: true, text: 'мс' } },
+                    x: { ticks: { maxTicksLimit: 12, autoSkip: true } } },
+          plugins: { legend: { position: 'bottom' } }
+        }
+      });
+    })();
+    </script>
+  {% else %}
+    <p class="text-muted m-0">немає даних</p>
+  {% endif %}
+</div></div>
+
+<h2 class="h5">Інциденти</h2>
+<table class="table bg-white table-sm mb-4">
+  <thead><tr><th>Початок</th><th>Кінець</th><th>Тривалість</th><th>Перша помилка</th></tr></thead>
+  <tbody>
+  {% for i in incidents %}
+    <tr>
+      <td>{{ i.started_at|date:"Y-m-d H:i" }}</td>
+      <td>{% if i.resolved_at %}{{ i.resolved_at|date:"Y-m-d H:i" }}{% else %}<span class="badge text-bg-danger">триває</span>{% endif %}</td>
+      <td>{% if i.resolved_at %}{{ i.started_at|timesince:i.resolved_at }}{% else %}{{ i.started_at|timesince }}{% endif %}</td>
+      <td>{{ i.first_error }}</td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="4" class="text-muted text-center">Інцидентів не було.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<div class="d-flex justify-content-between align-items-center">
+  <h2 class="h5">Останні перевірки</h2>
+  {% if only_failed %}<a href="?period={{ period }}">показати всі</a>{% else %}<a href="?period={{ period }}&only_failed=1">лише падіння</a>{% endif %}
+</div>
+<table class="table bg-white table-sm">
+  <thead><tr><th>Час</th><th>Статус</th><th>Код</th><th>Відповідь, мс</th><th>Помилка</th></tr></thead>
+  <tbody>
+  {% for c in page %}
+    <tr>
+      <td>{{ c.checked_at|date:"Y-m-d H:i:s" }}</td>
+      <td>{% if c.is_up %}🟢 up{% else %}🔴 down{% endif %}</td>
+      <td>{{ c.status_code|default_if_none:"—" }}</td>
+      <td>{{ c.response_time_ms|default_if_none:"—" }}</td>
+      <td>{{ c.error|default_if_none:"" }}</td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="5" class="text-muted text-center">Перевірок ще немає.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<nav class="d-flex gap-3">
+  {% if page.has_previous %}<a href="?period={{ period }}{% if only_failed %}&only_failed=1{% endif %}&page={{ page.previous_page_number }}">← нові</a>{% endif %}
+  <span class="text-muted">стор. {{ page.number }} / {{ page.paginator.num_pages }}</span>
+  {% if page.has_next %}<a href="?period={{ period }}{% if only_failed %}&only_failed=1{% endif %}&page={{ page.next_page_number }}">старіші →</a>{% endif %}
+</nav>
+{% endblock %}
