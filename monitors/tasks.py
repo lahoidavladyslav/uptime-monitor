@@ -12,12 +12,11 @@ from django.db.models import DateTimeField, DurationField, ExpressionWrapper, F,
 from django.urls import reverse
 from django.utils import timezone
 
-from . import maintenance, regions, rollups, subscriptions, webhooks
+from . import maintenance, partitions, regions, rollups, subscriptions, webhooks
 from .checks import MAX_BODY_BYTES, evaluate
 from .http_client import guarded_session
 from .models import (
     CheckResult,
-    CheckRollupHourly,
     Incident,
     Monitor,
     MonitorRegion,
@@ -435,26 +434,10 @@ def cleanup_unconfirmed_subscribers():
 
 
 @shared_task
-def cleanup_old_checks():
-    """Delete in batches so we never hold one giant transaction / table lock.
-
-    The cutoff is hour-aligned: a half-deleted hour could later be "rebuilt" from the rest of its raw rows
-    into a wrong rollup, so an hour is either wholly kept or wholly gone.
-    """
-    cutoff = rollups.floor_hour(timezone.now() - timedelta(days=settings.CHECK_RETENTION_DAYS))
-    total = 0
-    while True:
-        ids = list(
-            CheckResult.objects.filter(checked_at__lt=cutoff).values_list("pk", flat=True)[
-                : settings.CLEANUP_BATCH_SIZE
-            ]
-        )
-        if not ids:
-            break
-        deleted, _ = CheckResult.objects.filter(pk__in=ids).delete()
-        total += deleted
-    CheckRollupHourly.objects.filter(hour__lt=timezone.now() - timedelta(days=settings.ROLLUP_RETENTION_DAYS)).delete()
-    return total
+def manage_partitions():
+    """Hourly: create the next days' partitions, adopt strays from the default partition, drop partitions beyond
+    retention (after rolling them up), prune old rollups. Replaces the old batched DELETE cleanup."""
+    return partitions.manage()
 
 
 # ----------------------------- SSL certificate expiry -----------------------------

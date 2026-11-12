@@ -1,0 +1,13 @@
+# Hardcore H3 — declarative partitioning of `CheckResult`
+
+Spec: `uptime-monitor-hardcore.md` §H3. Branch `hardcore/h3-partitioning` (stacked on H6).
+
+**Decisions**
+- `PARTITION BY RANGE (checked_at)`, one partition per UTC day, names `monitors_checkresult_pYYYYMMDD`, plus a `…_default` partition.
+- **Primary key:** Postgres requires the partition key in every unique constraint, so the DB key is `(id, checked_at)`. Django 5.2's `CompositePrimaryKey("id", "checked_at")` models exactly that; `id` is a plain `BigIntegerField` with `db_default=nextval(<sequence>)` (Django omits it from INSERT and reads it back with RETURNING). Chosen over an unmanaged model with a fake single-column pk because `pk`, `save()`, `delete()`, `filter(pk=…)`, `bulk_create` all keep working and the model tells the truth about the schema (spike: create / bulk_create / save / delete verified).
+- Migration `0010` is one `SeparateDatabaseAndState`: SQL does rename-old → create partitioned parent + default + daily partitions for the existing data range (+3 days) → `INSERT … SELECT` (ids preserved, sequence re-created at `max(id)`) → indexes/FK on the parent → drop old table; `reverse_sql` does the mirror image back to a plain identity table. Tested forward+reverse with data.
+- `manage_partitions` (hourly): create today..+3 days ahead; **adopt** rows that landed in the default partition (move them into a properly created partition via `CREATE TABLE … LIKE`, `DELETE … RETURNING` → `INSERT`, `ATTACH PARTITION`, because `CREATE TABLE … PARTITION OF` would fail while the default holds rows of that range), only within ±(retention+3 days) so a bogus year-2099 timestamp can't mint partitions; purge default rows older than retention in batches; **drop** partitions that lie wholly beyond retention, after re-running `rollups.build` for that day (never drop data that is not in a rollup). `cleanup_old_checks` (batched DELETE) is retired; rollup retention moves into `manage_partitions`.
+- The default partition must be empty: `/metrics` exposes `uptime_checkresult_default_partition_rows`; `manage_partitions` logs a warning when it is not.
+- Evidence in README: `EXPLAIN ANALYZE` showing partition pruning, and a measured DELETE-vs-DROP comparison (time, WAL, dead tuples).
+
+**Tests pin:** table is partitioned and keyed `(id, checked_at)`; ORM round-trip incl. cascade from Monitor; rows land in the right partition; partitions are created ahead and idempotently; a row with no partition lands in default (no error), is counted by the metric and adopted by the next run; bogus far-future rows stay in default; expired partitions are dropped (rollup built first), the cutoff-day partition is kept; pruning in `EXPLAIN`; migration reverse+forward keeps the data.

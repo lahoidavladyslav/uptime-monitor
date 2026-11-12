@@ -14,7 +14,7 @@ from django.utils import timezone
 from monitors import rollups
 from monitors.models import CheckResult, CheckRollupHourly, Monitor
 from monitors.services import daily_bars, long_term_uptime, monitor_stats, response_time_series, uptime_by_monitor
-from monitors.tasks import build_rollups, cleanup_old_checks
+from monitors.tasks import build_rollups
 from reports.tasks import build_rows
 
 T0 = datetime(2026, 11, 12, 13, 27, 40, tzinfo=UTC)
@@ -253,19 +253,9 @@ def test_a_report_can_cover_days_whose_raw_rows_are_long_gone(user, two):
 
 
 # ---------------- retention ----------------
-@time_machine.travel(T0, tick=False)
-def test_raw_lives_seven_days_cut_on_an_hour_boundary_and_rollups_a_year(two, settings):
-    a, _ = two
+def test_retention_settings_are_seven_days_raw_and_a_year_of_rollups(settings):
+    # raw rows are dropped by whole-day partitions (see test_partitioning.py), rollups are pruned by manage_partitions
     assert settings.CHECK_RETENTION_DAYS == 7 and settings.ROLLUP_RETENTION_DAYS == 365
-    cutoff = rollups.floor_hour(T0 - timedelta(days=7))
-    keep_edge = check(a, at(cutoff, minutes=1))  # inside the cutoff hour: kept, so no half-hour is ever left
-    drop = check(a, at(cutoff, minutes=-1))
-    CheckResult.objects.bulk_create([keep_edge, drop])
-    CheckRollupHourly.objects.create(monitor=a, hour=T0 - timedelta(days=366), checks_total=1, checks_up=1)
-    fresh = CheckRollupHourly.objects.create(monitor=a, hour=T0 - timedelta(days=200), checks_total=1, checks_up=1)
-    cleanup_old_checks()
-    assert list(CheckResult.objects.values_list("checked_at", flat=True)) == [at(cutoff, minutes=1)]
-    assert list(CheckRollupHourly.objects.all()) == [fresh]
 
 
 # ---------------- backfill ----------------

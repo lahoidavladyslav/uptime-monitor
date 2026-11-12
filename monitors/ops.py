@@ -14,6 +14,7 @@ from django.views.decorators.http import require_GET
 
 from reports.models import ReportExport
 
+from . import partitions
 from .models import CheckResult, Incident, Monitor
 from .tasks import due_monitors
 
@@ -102,6 +103,16 @@ def metrics(request):
     metric(
         "uptime_checks_last_5m", "Checks recorded in the last 5 minutes.",
         [_line("uptime_checks_last_5m", CheckResult.objects.filter(checked_at__gte=now - timedelta(minutes=5)).count())],
+    )  # fmt: skip
+
+    metric(
+        "uptime_checkresult_default_partition_rows",
+        "Rows in the default partition of the check table. Must be 0; anything there means a day's partition was missing.",
+        [_line("uptime_checkresult_default_partition_rows", partitions.default_rows())],
+    )
+    metric(
+        "uptime_checkresult_partitions", "Attached daily partitions of the check table.",
+        [_line("uptime_checkresult_partitions", len(partitions.daily_partitions()))],
     )  # fmt: skip
 
     # How overdue is the most overdue monitor? Grows when beat or the workers are stuck.

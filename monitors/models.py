@@ -4,7 +4,7 @@ import uuid
 from django.conf import settings
 from django.core.validators import URLValidator
 from django.db import models
-from django.db.models import Q
+from django.db.models import Func, Q, Value
 from django.utils import timezone
 
 from accounts.fields import EncryptedTextField
@@ -78,7 +78,19 @@ class Monitor(models.Model):
         super().save(*args, **kwargs)
 
 
+CHECKRESULT_ID_SEQUENCE = "monitors_checkresult_id_seq"
+
+
 class CheckResult(models.Model):
+    """One check from one region. The table is RANGE-partitioned by day on `checked_at` (migration 0010,
+    `monitors.partitions`), so Postgres needs the partition key inside every unique key: the primary key is
+    `(id, checked_at)`. `id` still comes from one sequence (db_default), Django reads it back with RETURNING."""
+
+    pk = models.CompositePrimaryKey("id", "checked_at")
+    id = models.BigIntegerField(
+        editable=False,
+        db_default=Func(Value(CHECKRESULT_ID_SEQUENCE), function="nextval", output_field=models.BigIntegerField()),
+    )
     monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE, related_name="checks")
     checked_at = models.DateTimeField()
     status_code = models.PositiveSmallIntegerField(null=True, blank=True)

@@ -172,9 +172,9 @@ CELERY_BEAT_SCHEDULE = {
         "task": "accounts.tasks.cleanup_login_events",
         "schedule": crontab(hour=3, minute=30),
     },
-    "cleanup-old-checks": {
-        "task": "monitors.tasks.cleanup_old_checks",
-        "schedule": crontab(hour=3, minute=0),
+    "manage-partitions": {
+        "task": "monitors.tasks.manage_partitions",
+        "schedule": crontab(minute=20),
     },
 }
 

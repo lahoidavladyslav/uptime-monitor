@@ -1,7 +1,8 @@
 from django.contrib import admin
 
-from .models import CheckResult, Incident, Monitor
+from .models import Incident, Monitor
 
 admin.site.register(Monitor)
-admin.site.register(CheckResult)
+# CheckResult is not registered: Django's admin cannot handle a composite primary key (and a browsable list of
+# millions of raw rows would be useless anyway; use the monitor page).
 admin.site.register(Incident)
