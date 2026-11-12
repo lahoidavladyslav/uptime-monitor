@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3">Видалити «{{ object.name }}»?</h1>
+<p>Усі перевірки та інциденти цього монітора буде видалено.</p>
+<form method="post">{% csrf_token %}
+  <button class="btn btn-danger">Видалити</button>
+  <a class="btn btn-outline-secondary" href="{% url 'monitor_detail' object.pk %}">Скасувати</a>
+</form>
+{% endblock %}

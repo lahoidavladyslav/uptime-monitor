@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3">Звіти</h1>
+<form method="post" class="card card-body mb-4" style="max-width:560px">{% csrf_token %}
+  {{ form.as_p }}
+  <button class="btn btn-primary">Згенерувати CSV</button>
+</form>
+<table class="table bg-white align-middle">
+  <thead><tr><th>Створено</th><th>Період</th><th>Статус</th><th></th></tr></thead>
+  <tbody>
+  {% for e in exports %}
+    <tr>
+      <td>{{ e.created_at|date:"Y-m-d H:i" }}</td>
+      <td>{{ e.period_start }} — {{ e.period_end }}</td>
+      <td>{{ e.get_status_display }}{% if e.error %}<div class="small text-danger">{{ e.error }}</div>{% endif %}</td>
+      <td>{% if e.status == 'done' %}<a href="{% url 'report_download' e.pk %}">Завантажити</a>{% endif %}</td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="4" class="text-muted text-center">Звітів ще немає.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
