@@ -5,6 +5,7 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.cache import cache
 from django.core.paginator import Paginator
+from django.db import transaction
 from django.db.models import Count, OuterRef, Q, Subquery
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -14,11 +15,11 @@ from django.utils import timezone
 from django.views import View
 from django.views.generic import CreateView, DeleteView, ListView, UpdateView
 
-from .forms import MonitorForm
-from .models import CheckResult, Incident, Monitor
+from .forms import MaintenanceForm, MonitorForm
+from .models import CheckResult, Incident, MaintenanceWindow, Monitor
 from .services import PERIODS, daily_bar, monitor_stats, response_time_series, uptime_percent
 from .signals import status_cache_key
-from .tasks import check_monitor
+from .tasks import check_monitor, check_ssl, under_maintenance
 
 
 class OwnedMonitorMixin(LoginRequiredMixin):
@@ -57,6 +58,7 @@ class DashboardView(HtmxLoginRequiredMixin, ListView):
         return Monitor.objects.filter(user=self.request.user).annotate(
             last_is_up=Subquery(latest.values("is_up")[:1]),
             down_since=Subquery(open_incident.values("started_at")[:1]),
+            in_maintenance=under_maintenance(timezone.now()),
             checks_24h=Count("checks", filter=Q(checks__checked_at__gte=since)),
             up_24h=Count("checks", filter=Q(checks__checked_at__gte=since, checks__is_up=True)),
         )
@@ -81,7 +83,11 @@ class MonitorCreateView(LoginRequiredMixin, CreateView):
     def form_valid(self, form):
         form.instance.user = self.request.user
         messages.success(self.request, "Монітор створено.")
-        return super().form_valid(form)
+        response = super().form_valid(form)
+        pk = self.object.pk
+        if self.object.url.lower().startswith("https://"):
+            transaction.on_commit(lambda: check_ssl.delay(pk))
+        return response
 
     def get_success_url(self):
         return reverse_lazy("monitor_detail", args=[self.object.pk])
@@ -111,6 +117,12 @@ class MonitorDeleteView(OwnedMonitorMixin, DeleteView):
         return super().form_valid(form)
 
 
+def _ssl_days_left(monitor):
+    if monitor.ssl_expires_at is None:
+        return None
+    return max((monitor.ssl_expires_at - timezone.now()).days, 0)
+
+
 class MonitorDetailView(OwnedMonitorMixin, View):
     def get(self, request, pk):
         monitor = get_object_or_404(self.get_queryset(), pk=pk)
@@ -135,6 +147,12 @@ class MonitorDetailView(OwnedMonitorMixin, View):
                 "only_failed": only_failed,
                 "page": page,
                 "incidents": monitor.incidents.all()[:50],
+                "ssl_days_left": _ssl_days_left(monitor),
+                "windows": monitor.maintenance_windows.filter(ends_at__gt=timezone.now()).order_by("starts_at")[:10],
+                "maintenance_form": MaintenanceForm(),
+                "in_maintenance": monitor.maintenance_windows.filter(
+                    starts_at__lte=timezone.now(), ends_at__gt=timezone.now()
+                ).exists(),
             },
         )
 
@@ -156,8 +174,36 @@ class CheckNowView(OwnedMonitorMixin, View):
         if not _cooldown_ok(f"check-now:{monitor.pk}", settings.CHECK_NOW_COOLDOWN_SECONDS):
             messages.warning(request, "Зачекайте кілька секунд перед наступною перевіркою.")
             return redirect("monitor_detail", pk=monitor.pk)
+        if monitor.maintenance_windows.filter(starts_at__lte=timezone.now(), ends_at__gt=timezone.now()).exists():
+            messages.warning(request, "Монітор зараз на обслуговуванні — перевірки призупинено.")
+            return redirect("monitor_detail", pk=monitor.pk)
         check_monitor.delay(monitor.pk, force=True)
+        if monitor.url.lower().startswith("https://"):
+            check_ssl.delay(monitor.pk)
         messages.success(request, "Перевірку запущено")
+        return redirect("monitor_detail", pk=monitor.pk)
+
+
+class MaintenanceCreateView(OwnedMonitorMixin, View):
+    def post(self, request, pk):
+        monitor = get_object_or_404(self.get_queryset(), pk=pk)
+        form = MaintenanceForm(request.POST)
+        if form.is_valid():
+            window = form.save(commit=False)
+            window.monitor = monitor
+            window.save()
+            messages.success(request, "Вікно обслуговування додано: у цей час перевірки не виконуються.")
+        else:
+            for error in sum(form.errors.values(), []):
+                messages.error(request, error)
+        return redirect("monitor_detail", pk=monitor.pk)
+
+
+class MaintenanceDeleteView(OwnedMonitorMixin, View):
+    def post(self, request, pk, window_id):
+        monitor = get_object_or_404(self.get_queryset(), pk=pk)
+        get_object_or_404(MaintenanceWindow, pk=window_id, monitor=monitor).delete()
+        messages.success(request, "Вікно видалено.")
         return redirect("monitor_detail", pk=monitor.pk)
 
 
@@ -177,7 +223,15 @@ def public_status(request, slug):
         last = monitor.checks.order_by("-checked_at").values_list("is_up", flat=True).first()
         html = render_to_string(
             "monitors/status.html",
-            {"name": monitor.name, "is_up": last, "uptime": stats["uptime"], "bar": daily_bar(monitor, 7)},
+            {
+                "name": monitor.name,
+                "is_up": last,
+                "uptime": stats["uptime"],
+                "bar": daily_bar(monitor, 7),
+                "maintenance": monitor.maintenance_windows.filter(
+                    starts_at__lte=timezone.now(), ends_at__gt=timezone.now()
+                ).exists(),
+            },
             request,
         )
         cache.set(key, html, settings.PUBLIC_STATUS_CACHE_SECONDS)

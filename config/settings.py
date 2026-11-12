@@ -99,6 +99,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "monitors.tasks.schedule_checks",
         "schedule": 60.0,
     },
+    "ssl-expiry-checks": {
+        "task": "monitors.tasks.schedule_ssl_checks",
+        "schedule": crontab(hour=4, minute=0),
+    },
     "cleanup-old-checks": {
         "task": "monitors.tasks.cleanup_old_checks",
         "schedule": crontab(hour=3, minute=0),

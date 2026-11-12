@@ -17,6 +17,43 @@
   </div>
 </div>
 
+<div class="row g-3 mb-4">
+  <div class="col-md-6"><div class="card h-100"><div class="card-body">
+    <h2 class="h6">Конфігурація перевірки</h2>
+    <div class="small">
+      <div>Метод: <strong>{{ monitor.http_method }}</strong></div>
+      <div>Очікувані коди: <strong>{{ monitor.expected_status|default:"2xx / 3xx" }}</strong></div>
+      {% if monitor.expected_text %}<div>Має містити: <code>{{ monitor.expected_text }}</code></div>{% endif %}
+      {% if monitor.request_headers %}<div>Заголовків: {{ monitor.request_headers|length }}</div>{% endif %}
+    </div>
+    {% if monitor.url|slice:":5" == "https" %}
+    <hr class="my-2">
+    <div class="small">SSL:
+      {% if monitor.ssl_error %}<span class="text-danger">{{ monitor.ssl_error }}</span>
+      {% elif ssl_days_left is None %}<span class="text-muted">ще не перевірявся</span>
+      {% elif ssl_days_left <= 3 %}<span class="text-danger fw-bold">спливає через {{ ssl_days_left }} дн. ({{ monitor.ssl_expires_at|date:"Y-m-d" }})</span>
+      {% elif ssl_days_left <= 14 %}<span class="text-warning fw-bold">спливає через {{ ssl_days_left }} дн. ({{ monitor.ssl_expires_at|date:"Y-m-d" }})</span>
+      {% else %}🟢 діє до {{ monitor.ssl_expires_at|date:"Y-m-d" }} ({{ ssl_days_left }} дн.){% endif %}
+    </div>
+    {% endif %}
+  </div></div></div>
+  <div class="col-md-6"><div class="card h-100"><div class="card-body">
+    <h2 class="h6">Вікна обслуговування {% if in_maintenance %}<span class="badge text-bg-warning">триває</span>{% endif %}</h2>
+    {% for w in windows %}
+      <form method="post" action="{% url 'maintenance_delete' monitor.pk w.pk %}" class="d-flex justify-content-between small mb-1">{% csrf_token %}
+        <span>{{ w.starts_at|date:"Y-m-d H:i" }} → {{ w.ends_at|date:"Y-m-d H:i" }} UTC {% if w.reason %}· {{ w.reason }}{% endif %}</span>
+        <button class="btn btn-sm btn-link text-danger p-0">видалити</button>
+      </form>
+    {% empty %}<p class="small text-muted mb-2">Запланованих немає. Під час вікна перевірки не виконуються і не рахуються як простій.</p>{% endfor %}
+    <form method="post" action="{% url 'maintenance_create' monitor.pk %}" class="row g-2 mt-1">{% csrf_token %}
+      <div class="col-6">{{ maintenance_form.starts_at }}</div>
+      <div class="col-6">{{ maintenance_form.ends_at }}</div>
+      <div class="col-8">{{ maintenance_form.reason }}</div>
+      <div class="col-4"><button class="btn btn-sm btn-outline-secondary w-100">Додати</button></div>
+    </form>
+  </div></div></div>
+</div>
+
 <div class="card mb-4"><div class="card-body">
   <div class="btn-group mb-3">
     <a class="btn btn-sm {% if period == '24h' %}btn-dark{% else %}btn-outline-dark{% endif %}" href="?period=24h">24 години</a>
