@@ -118,3 +118,14 @@ def test_celery_task_id_is_bound_while_a_task_runs():
     result = probe.apply()
     assert seen["during"] == result.id
     assert obs.task_id_var.get() is None  # reset afterwards
+
+
+def test_httpx_request_logging_is_silenced_but_real_problems_still_show():
+    from django.conf import settings
+
+    loggers = settings.LOGGING["loggers"]
+    assert loggers["httpx"]["level"] == "WARNING" and loggers["httpcore"]["level"] == "WARNING"
+    import logging
+
+    assert not logging.getLogger("httpx").isEnabledFor(logging.INFO)
+    assert logging.getLogger("httpx").isEnabledFor(logging.WARNING)

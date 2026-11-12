@@ -122,6 +122,9 @@ class MonitorRegion(models.Model):
     monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE, related_name="region_clocks")
     region = models.CharField(max_length=16)
     last_checked_at = models.DateTimeField(null=True, blank=True)
+    # set by schedule_checks when this (monitor, region) was put on a queue, cleared when its batch runs:
+    # a monitor that is already waiting in line is not enqueued again (backpressure), see tasks.schedule_checks
+    queued_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["monitor", "region"], name="uniq_monitor_region")]

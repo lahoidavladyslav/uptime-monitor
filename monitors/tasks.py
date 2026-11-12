@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 from datetime import UTC, timedelta
@@ -7,12 +8,12 @@ import requests
 from celery import shared_task
 from django.conf import settings
 from django.core.mail import EmailMessage, send_mail
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.db.models import DateTimeField, DurationField, ExpressionWrapper, F, Q, Value
 from django.urls import reverse
 from django.utils import timezone
 
-from . import maintenance, partitions, regions, rollups, subscriptions, webhooks
+from . import async_checks, maintenance, partitions, regions, rollups, subscriptions, webhooks
 from .checks import MAX_BODY_BYTES, evaluate
 from .http_client import guarded_session
 from .models import (
@@ -27,8 +28,8 @@ from .security import blocked_reason
 
 logger = logging.getLogger(__name__)
 
-# beat ticks every 60s and last_checked_at is the *start* of the previous check,
-# so without slack a 60s monitor would drift to a 120s cadence.
+# last_checked_at is the *start* of the previous check and the scheduler ticks every 10 s (settings), so without
+# slack a 60 s monitor would drift to a 70 s cadence and, under load, miss a whole tick (see README, H5).
 DUE_SLACK = timedelta(seconds=10)
 
 
@@ -65,11 +66,41 @@ def enqueue_checks(monitor_id, force=False):
         )
 
 
+def _chunks(items, size):
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+def _take_queue_slots(monitor_ids, region, now):
+    """Mark (monitor, region) as queued and return the ids WE marked: one conditional UPDATE ... RETURNING.
+
+    A monitor already waiting in line (queued_at fresh) is skipped, so when the queue grows faster than it
+    drains the scheduler stops feeding it instead of piling five checks onto one monitor. A flag older than
+    QUEUED_TTL is treated as a lost task and taken again.
+    """
+    MonitorRegion.objects.bulk_create(
+        [MonitorRegion(monitor_id=i, region=region) for i in monitor_ids], ignore_conflicts=True
+    )
+    with connection.cursor() as cur:
+        cur.execute(
+            """UPDATE monitors_monitorregion SET queued_at = %s
+               WHERE region = %s AND monitor_id = ANY(%s)
+                 AND (queued_at IS NULL OR queued_at < %s - make_interval(secs => %s))
+               RETURNING monitor_id""",
+            [now, region, list(monitor_ids), now, settings.QUEUED_TTL_SECONDS],
+        )
+        taken = {row[0] for row in cur.fetchall()}
+    return [i for i in monitor_ids if i in taken]  # keep the "most overdue first" order
+
+
 @shared_task
 def schedule_checks():
-    ids = list(due_monitors().values_list("pk", flat=True))
-    for monitor_id in ids:
-        enqueue_checks(monitor_id)
+    """Every minute: put due monitors on the region queues in BATCHES, most overdue first, unless already queued."""
+    now = timezone.now()
+    ids = list(due_monitors(now).order_by(F("due_at").asc(nulls_first=True), "pk").values_list("pk", flat=True))
+    for region in settings.CHECK_REGIONS if ids else []:
+        for chunk in _chunks(_take_queue_slots(ids, region, now), settings.CHECK_BATCH_SIZE):
+            check_batch.apply_async(args=[chunk], kwargs={"region": region}, queue=f"checks.{region}")
     return len(ids)
 
 
@@ -321,6 +352,129 @@ def record_check(monitor_id, region, checked_at, status_code, elapsed, is_up, er
         if verdict is not None:
             set_incident_state(monitor, verdict, checked_at, error if not verdict else None, in_maintenance=in_window)
     return "up" if is_up else "down"
+
+
+def claim_batch(monitor_ids, region, force=False):
+    """Claim many monitors for one region in a single UPDATE ... FROM ... RETURNING.
+
+    It is the same atomic "is it due?" test as `claim_monitor`, per (monitor, region) clock: of two batches
+    racing for a monitor exactly one gets it (the loser re-evaluates the WHERE after the row lock). It also
+    clears the queued flag of EVERY id in the batch, claimed or not, so nothing stays "waiting" forever.
+    Returns (claimed ids, now).
+    """
+    now = timezone.now()
+    ids = list(monitor_ids)
+    MonitorRegion.objects.bulk_create([MonitorRegion(monitor_id=i, region=region) for i in ids], ignore_conflicts=True)
+    MonitorRegion.objects.filter(monitor_id__in=ids, region=region).update(queued_at=None)
+    with connection.cursor() as cur:
+        cur.execute(
+            """UPDATE monitors_monitorregion r SET last_checked_at = %s
+               FROM monitors_monitor m
+               WHERE r.monitor_id = m.id AND r.region = %s AND r.monitor_id = ANY(%s) AND m.is_active
+                 AND (%s OR r.last_checked_at IS NULL
+                      OR r.last_checked_at <= %s - make_interval(secs => m.interval_seconds) + %s)
+               RETURNING r.monitor_id""",
+            [now, region, ids, force, now, DUE_SLACK],
+        )
+        claimed = sorted(row[0] for row in cur.fetchall())
+    if claimed:
+        Monitor.objects.filter(pk__in=claimed).update(last_checked_at=now)  # the scheduler/dashboard clock
+    return claimed, now
+
+
+@shared_task
+def check_batch(monitor_ids, region=None, force=False):
+    """Check many monitors at once: bulk claim -> ONE asyncio run (no ORM inside) -> ONE bulk write.
+
+    A new event loop per task is deliberate: `run_checks` creates its HTTP client inside and closes it in a
+    `finally`, so a long-lived Celery process never holds a loop or a socket between tasks.
+    """
+    region = region or regions.default_region()
+    claimed, _ = claim_batch(monitor_ids, region, force)
+    if not claimed:
+        return {"checked": 0, "up": 0, "down": 0, "decided": 0}
+    items = [
+        async_checks.CheckItem(
+            monitor_id=c["pk"],
+            url=c["url"],
+            method=c["http_method"],
+            headers=c["request_headers"],
+            body=c["request_body"],
+            expected_status=c["expected_status"],
+            expected_text=c["expected_text"],
+        )
+        for c in Monitor.objects.filter(pk__in=claimed).values(
+            "pk", "url", "http_method", "request_headers", "request_body", "expected_status", "expected_text"
+        )
+    ]
+    rows = asyncio.run(
+        async_checks.run_checks(items, concurrency=settings.CHECK_CONCURRENCY, per_host=settings.CHECK_PER_HOST)
+    )
+    return record_batch(rows, region)
+
+
+def record_batch(rows, region):
+    """Write a batch of results with ONE bulk insert and run the incident logic only where it can matter.
+
+    All the batch's monitors are locked in id order (so two workers can't deadlock), results for monitors that
+    vanished meanwhile are dropped, and the per-monitor quorum/incident code runs only for monitors whose state
+    can change: "up with no open incident" (the steady state, ~all of them) costs no further queries.
+    """
+    if not rows:
+        return {"checked": 0, "up": 0, "down": 0, "decided": 0}
+    now = timezone.now()
+    summary = {"checked": 0, "up": 0, "down": 0, "decided": 0}
+    with transaction.atomic():
+        monitors = {
+            m.pk: m
+            for m in Monitor.objects.select_for_update(of=("self",))
+            .filter(pk__in={r.monitor_id for r in rows})
+            .annotate(in_window=maintenance.under_maintenance_expr(now))
+            .order_by("pk")
+        }
+        kept = [r for r in rows if r.monitor_id in monitors]
+        created = CheckResult.objects.bulk_create(
+            [
+                CheckResult(
+                    monitor_id=r.monitor_id,
+                    region=region,
+                    checked_at=r.started_at,
+                    status_code=r.status_code,
+                    response_time_ms=r.response_time_ms,
+                    is_up=r.is_up,
+                    error=r.error,
+                    in_maintenance=monitors[r.monitor_id].in_window,
+                )
+                for r in kept
+            ]
+        )
+        open_ids = set(
+            Incident.objects.filter(monitor_id__in=list(monitors), resolved_at__isnull=True).values_list(
+                "monitor_id", flat=True
+            )
+        )
+        for row, result in zip(kept, created, strict=True):
+            monitor = monitors[row.monitor_id]
+            summary["checked"] += 1
+            summary["up" if row.is_up else "down"] += 1
+            has_open = row.monitor_id in open_ids
+            changes = (
+                has_open if row.is_up else (not has_open or monitor.in_window)
+            ) or monitor.flapping_since is not None
+            if not changes:
+                continue
+            summary["decided"] += 1
+            _maybe_stabilise(monitor, row.started_at)
+            verdict = regions.decide(monitor, result)
+            if verdict is not None:
+                set_incident_state(
+                    monitor,
+                    verdict,
+                    row.started_at,
+                    row.error if not verdict else None,
+                    in_maintenance=monitor.in_window,
+                )
+    return summary
 
 
 @shared_task(

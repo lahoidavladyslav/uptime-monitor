@@ -1,0 +1,88 @@
+# Load test: docker compose -f docker-compose.yml -f docker-compose.load.yml up -d --build
+#   docker compose exec web python manage.py seed_load --monitors 10000
+#   docker compose exec web python manage.py load_report
+# The fake server answers to fake-00 ... fake-49 (docker network aliases), so monitors spread over 50 "hosts".
+services:
+  fake-target:
+    build: ./loadtest
+    environment:
+      LATENCY_MIN: "0.05"
+      LATENCY_MAX: "3.0"
+      ERROR_RATE: "0.05"
+    networks:
+      default:
+        aliases:
+          - fake-00
+          - fake-01
+          - fake-02
+          - fake-03
+          - fake-04
+          - fake-05
+          - fake-06
+          - fake-07
+          - fake-08
+          - fake-09
+          - fake-10
+          - fake-11
+          - fake-12
+          - fake-13
+          - fake-14
+          - fake-15
+          - fake-16
+          - fake-17
+          - fake-18
+          - fake-19
+          - fake-20
+          - fake-21
+          - fake-22
+          - fake-23
+          - fake-24
+          - fake-25
+          - fake-26
+          - fake-27
+          - fake-28
+          - fake-29
+          - fake-30
+          - fake-31
+          - fake-32
+          - fake-33
+          - fake-34
+          - fake-35
+          - fake-36
+          - fake-37
+          - fake-38
+          - fake-39
+          - fake-40
+          - fake-41
+          - fake-42
+          - fake-43
+          - fake-44
+          - fake-45
+          - fake-46
+          - fake-47
+          - fake-48
+          - fake-49
+  web:
+    environment:
+      ALLOW_PRIVATE_TARGETS: "1"   # the fake target lives on the docker network
+      CHECK_REGIONS: eu            # ONE region while measuring, so numbers are per worker pool (3 regions = 3x the work)
+  worker:
+    environment:
+      ALLOW_PRIVATE_TARGETS: "1"   # the fake target lives on the docker network
+      CHECK_REGIONS: eu            # ONE region while measuring, so numbers are per worker pool (3 regions = 3x the work)
+  worker-eu:
+    environment:
+      ALLOW_PRIVATE_TARGETS: "1"   # the fake target lives on the docker network
+      CHECK_REGIONS: eu            # ONE region while measuring, so numbers are per worker pool (3 regions = 3x the work)
+  worker-us:
+    environment:
+      ALLOW_PRIVATE_TARGETS: "1"   # the fake target lives on the docker network
+      CHECK_REGIONS: eu            # ONE region while measuring, so numbers are per worker pool (3 regions = 3x the work)
+  worker-asia:
+    environment:
+      ALLOW_PRIVATE_TARGETS: "1"   # the fake target lives on the docker network
+      CHECK_REGIONS: eu            # ONE region while measuring, so numbers are per worker pool (3 regions = 3x the work)
+  beat:
+    environment:
+      ALLOW_PRIVATE_TARGETS: "1"   # the fake target lives on the docker network
+      CHECK_REGIONS: eu            # ONE region while measuring, so numbers are per worker pool (3 regions = 3x the work)

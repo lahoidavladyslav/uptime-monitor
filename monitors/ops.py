@@ -14,7 +14,7 @@ from django.views.decorators.http import require_GET
 
 from reports.models import ReportExport
 
-from . import partitions
+from . import loadstats, partitions
 from .models import CheckResult, Incident, Monitor
 from .tasks import due_monitors
 
@@ -113,6 +113,26 @@ def metrics(request):
     metric(
         "uptime_checkresult_partitions", "Attached daily partitions of the check table.",
         [_line("uptime_checkresult_partitions", len(partitions.daily_partitions()))],
+    )  # fmt: skip
+
+    metric(
+        "uptime_queue_length", "Messages waiting in each Celery queue.",
+        [_line("uptime_queue_length", n, {"queue": q}) for q, n in loadstats.queue_lengths().items()],
+    )  # fmt: skip
+    metric(
+        "uptime_checks_last_1m", "Checks recorded in the last minute (throughput).",
+        [_line("uptime_checks_last_1m", loadstats.checks_last_minute(now))],
+    )  # fmt: skip
+    pct = loadstats.response_percentiles(now)
+    if pct is not None:
+        metric(
+            "uptime_response_time_ms", "Response time of checks in the last 5 minutes.",
+            [_line("uptime_response_time_ms", pct[0], {"quantile": "0.5"}),
+             _line("uptime_response_time_ms", pct[1], {"quantile": "0.95"})],
+        )  # fmt: skip
+    metric(
+        "uptime_overdue_checks", "Monitors whose check is more than 30 s past its slot (the backlog).",
+        [_line("uptime_overdue_checks", loadstats.overdue_checks(now))],
     )  # fmt: skip
 
     # How overdue is the most overdue monitor? Grows when beat or the workers are stuck.

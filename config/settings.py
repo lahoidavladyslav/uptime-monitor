@@ -142,7 +142,11 @@ CELERY_TIMEZONE = "UTC"
 CELERY_BEAT_SCHEDULE = {
     "schedule-checks": {
         "task": "monitors.tasks.schedule_checks",
-        "schedule": 60.0,
+        # Found by the load test (README, H5): with a 60 s tick a monitor whose last check was started more than
+        # DUE_SLACK late misses the next tick and waits a whole extra minute (60 s interval -> 120 s). Ticking every
+        # 10 s keeps the cadence within one slack of the interval; the queued flag stops the extra ticks from
+        # piling work up.
+        "schedule": 10.0,
     },
     "expand-maintenance": {
         "task": "monitors.tasks.expand_maintenance",
@@ -183,6 +187,11 @@ CELERY_BEAT_SCHEDULE = {
 # needs a quorum of them. CHECK_REGION is the region of THIS worker process.
 CHECK_REGIONS = [r.strip() for r in os.environ.get("CHECK_REGIONS", "eu,us,asia").split(",") if r.strip()]
 CHECK_REGION = os.environ.get("CHECK_REGION", "")
+# batch checking (H5): how many monitors per task, how many requests in flight per task, per single host
+CHECK_BATCH_SIZE = int(os.environ.get("CHECK_BATCH_SIZE", "100"))
+CHECK_CONCURRENCY = int(os.environ.get("CHECK_CONCURRENCY", "200"))
+CHECK_PER_HOST = int(os.environ.get("CHECK_PER_HOST", "10"))
+QUEUED_TTL_SECONDS = int(os.environ.get("QUEUED_TTL_SECONDS", "180"))  # a queued monitor is retried after this
 ALLOW_PRIVATE_TARGETS = os.environ.get("ALLOW_PRIVATE_TARGETS", "0") == "1"
 CHECK_NOW_COOLDOWN_SECONDS = 10
 MAX_IN_PROGRESS_REPORTS = 3

@@ -253,12 +253,12 @@ def test_the_worker_region_is_the_default_region(bare, settings):
 def test_scheduling_fans_out_to_every_region_queue(mon, monkeypatch):
     sent = []
     monkeypatch.setattr(
-        "monitors.tasks.check_monitor.apply_async",
+        "monitors.tasks.check_batch.apply_async",
         lambda args=None, kwargs=None, queue=None, **kw: sent.append((args, kwargs, queue)),
     )
     assert schedule_checks() == 1
     assert sorted(q for _, _, q in sent) == ["checks.asia", "checks.eu", "checks.us"]
-    assert {a[0] for a, _, _ in sent} == {mon.pk} and {k["region"] for _, k, _ in sent} == {EU, US, ASIA}
+    assert {tuple(a[0]) for a, _, _ in sent} == {(mon.pk,)} and {k["region"] for _, k, _ in sent} == {EU, US, ASIA}
 
 
 def test_check_now_goes_to_every_region(auth_client, mon, monkeypatch):

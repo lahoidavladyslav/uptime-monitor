@@ -136,5 +136,8 @@ def build_logging(*, json_format: bool, level: str = "INFO") -> dict:
             "django.request": {"level": "ERROR"},
             # gunicorn's own access log would print raw paths too (see --access-logfile in Dockerfile.prod)
             "gunicorn.access": {"level": "WARNING"},
+            # httpx logs every request at INFO (monitored URLs, tens of thousands of lines a minute under load)
+            "httpx": {"level": "WARNING"},
+            "httpcore": {"level": "WARNING"},
         },
     }
