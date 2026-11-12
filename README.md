@@ -9,7 +9,7 @@ docker compose up --build
 docker compose exec web python manage.py seed_demo   # demo / demo12345
 ```
 
-Сайт: http://localhost:8000. Листи про інциденти друкуються в лог `worker`
+Сайт: http://localhost:8000. Листи про інциденти друкуються в лог `worker-notify`
 (`EMAIL_BACKEND=console`).
 
 ## Тести
@@ -23,7 +23,7 @@ docker compose run --rm web pytest
 
 Тести не потребують Redis: `config/settings_test.py` ставить locmem-кеш,
 `CELERY_TASK_ALWAYS_EAGER=True` і locmem-email. HTTP мокається через `responses`,
-час — через `time-machine`. 158 тестів.
+час — через `time-machine`. 178 тестів.
 
 ## CI та pre-commit
 
@@ -180,6 +180,49 @@ HTMX-запит віддає тільки фрагмент таблиці (то�
   два записи (початок і відновлення) з різними `guid`, щоб читалка показала новий запис
   про відновлення. `Cache-Control: max-age=60`. Email-підписки не робив: це double-opt-in,
   токени відписки й антиспам — окремий обсяг.
+
+## Експлуатація
+
+**Production-стек** (`docker-compose.prod.yml`, `Dockerfile.prod`, `deploy/nginx.conf`):
+
+```bash
+cp .env.example .env.prod      # заповнити SECRET_KEY, ALLOWED_HOSTS, паролі, SMTP
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+```
+
+- gunicorn за nginx; статика збирається при збірці образу й віддається WhiteNoise
+  (S3 не потрібен: медіа — лише звіти, які віддаються через view з перевіркою власника).
+- `DJANGO_ENV=production` вмикає fail-fast: без `SECRET_KEY` і `ALLOWED_HOSTS` застосунок
+  **не стартує**; `DEBUG` примусово вимкнений; Secure-cookies, HSTS, SSL-redirect
+  (`/healthz/` виключений, бо проби приходять по HTTP). `manage.py check --deploy` без
+  попереджень (перевіряється тестом). HSTS-preload — лише за явним `HSTS_PRELOAD=1`.
+- Контейнер працює від непривілейованого користувача; міграції — окремий one-shot сервіс,
+  від якого залежать усі інші. TLS термінується **перед** nginx (балансувальник/Caddy),
+  який має виставляти `X-Forwarded-Proto`.
+- nginx: `limit_req` на `/login|signup|password-reset|confirm` (429 після ліміту).
+- Брокер і кеш Celery — окремі Redis-бази (`REDIS_URL` / `CACHE_REDIS_URL`).
+
+**Окремі черги й воркери.** `checks` (цикл перевірок, SSL, rollup), `notifications`
+(листи), `reports` (CSV, `-c 1 -O fair`, `prefetch=1`). Довгий звіт ніколи не стоїть
+перед перевіркою або листом. Перевірено вживу: кожне завдання потрапляє у свій воркер.
+
+**Спостережуваність:**
+- `GET /healthz/` — 200, якщо веб-процес бачить БД і кеш (інакше 503). Поле `checks: stale`
+  показує, що фоновий конвеєр (beat → worker) мовчить, але **код відповіді не змінює**:
+  перезапуск web не оживить мертвий worker.
+- `GET /metrics/` — Prometheus-формат, **вимкнений, поки не задано `METRICS_TOKEN`**,
+  далі Bearer-авторизація (порівняння за постійний час). Метрики: монітори за станом,
+  відкриті інциденти, перевірки за 5 хв, статуси звітів, SSL ≤14 днів і
+  `uptime_scheduler_lag_seconds` — вік найбільш простроченої перевірки: зростає, коли
+  зупинилися beat або воркери (основний алерт). Кількість запитів не залежить від числа моніторів.
+- Sentry — лише якщо задано `SENTRY_DSN` (`send_default_pii=False`).
+
+**Погодинні агрегати.** `HourlyStat` (монітор × година: total/up/сума часу) рахується щогодини
+останні 3 години **ідемпотентно** (upsert одним запитом) і переживає 30-денне очищення
+сирих перевірок (зберігається 400 днів). На сторінці монітора — uptime за 30/90 днів. Для
+наявних даних: `manage.py backfill_rollups` (лише додає відсутні години, нічого не
+перезаписує). Партиціювання `CheckResult` не робив: з очищенням за 30 днів і агрегатами
+таблиця обмежена, а партиції варто додавати, коли виміри покажуть потребу.
 
 ## Відомі обмеження / що б робив далі
 

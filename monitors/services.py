@@ -133,3 +133,12 @@ def response_time_series(monitor, period="24h"):
         }
         for r in rows
     ]
+
+
+def long_term_uptime(monitor, days):
+    """Uptime over a long window from hourly rollups (raw checks are kept only 30 days)."""
+    from django.db.models import Sum
+
+    since = timezone.now() - timedelta(days=days)
+    agg = monitor.hourly_stats.filter(hour__gte=since).aggregate(total=Sum("total"), up=Sum("up"))
+    return uptime_percent(agg["total"] or 0, agg["up"] or 0)

@@ -7,3 +7,6 @@ media/
 .env
 .test_media/
 celerybeat-schedule*
+.env.*
+!.env.example
+staticfiles/

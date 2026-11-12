@@ -142,3 +142,22 @@ class StatusPage(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class HourlyStat(models.Model):
+    """Per-monitor, per-hour rollup of CheckResult.
+
+    Raw checks are deleted after 30 days; these rows are ~1/60th the size and let the UI
+    show long-term uptime (90 days, a year) without keeping the raw data.
+    """
+
+    monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE, related_name="hourly_stats")
+    hour = models.DateTimeField()
+    total = models.PositiveIntegerField()
+    up = models.PositiveIntegerField()
+    rt_sum = models.BigIntegerField(default=0)  # sum of response_time_ms over rt_count checks
+    rt_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["monitor", "hour"], name="uniq_hourly_monitor_hour")]
+        indexes = [models.Index(fields=["hour"], name="hourly_hour_idx")]
