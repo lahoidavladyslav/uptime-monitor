@@ -3,10 +3,12 @@ import { createBrowserRouter, createMemoryRouter, type RouteObject } from "react
 import { ComingSoon } from "@/components/ComingSoon";
 import { NotFoundPage } from "@/components/NotFoundPage";
 import { ConfirmPage } from "@/features/auth/ConfirmPage";
+import { ForgotPasswordPage } from "@/features/auth/ForgotPasswordPage";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { PublicOnly } from "@/features/auth/PublicOnly";
 import { RequireAuth } from "@/features/auth/RequireAuth";
 import { ResendPage } from "@/features/auth/ResendPage";
+import { ResetPasswordPage } from "@/features/auth/ResetPasswordPage";
 import { SignupPage } from "@/features/auth/SignupPage";
 import { SignupSentPage } from "@/features/auth/SignupSentPage";
 import { t } from "@/lib/strings";
@@ -21,12 +23,12 @@ export const routes: RouteObject[] = [
       { path: "/login", element: <LoginPage /> },
       { path: "/signup", element: <SignupPage /> },
       { path: "/signup/sent", element: <SignupSentPage /> },
-      { path: "/forgot-password", element: <Stub name="Скидання пароля" /> },
+      { path: "/forgot-password", element: <ForgotPasswordPage /> },
     ],
   },
   { path: "/confirm/:token", element: <ConfirmPage /> },
   { path: "/resend", element: <ResendPage /> },
-  { path: "/reset-password/:uid/:token", element: <Stub name="Новий пароль" /> },
+  { path: "/reset-password/:uid/:token", element: <ResetPasswordPage /> },
   {
     element: <RequireAuth />,
     children: [

@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { z } from "zod";
 
 import { FormAlert, FormField } from "@/components/FormField";
@@ -21,7 +21,8 @@ type Values = z.infer<typeof schema>;
 
 export function LoginPage() {
   const [step, setStep] = useState<"password" | "2fa">("password");
-  const [notice, setNotice] = useState<string | null>(null);
+  const location = useLocation();
+  const [notice, setNotice] = useState<string | null>((location.state as { notice?: string } | null)?.notice ?? null);
   const [params] = useSearchParams();
   const login = useLogin();
   const { register, handleSubmit, setError, formState } = useForm<Values>({ resolver: zodResolver(schema) });

@@ -36,3 +36,16 @@ export function useConfirm() {
 export function useResend() {
   return useMutation({ mutationFn: (email: string) => unwrap(client.POST("/api/v1/auth/resend", { body: { email } })) });
 }
+
+export function usePasswordReset() {
+  return useMutation({
+    mutationFn: (email: string) => unwrap(client.POST("/api/v1/auth/password-reset", { body: { email } })),
+  });
+}
+
+export function usePasswordResetConfirm() {
+  return useMutation({
+    mutationFn: (body: { uid: string; token: string; new_password1: string; new_password2: string }) =>
+      unwrap(client.POST("/api/v1/auth/password-reset/confirm", { body })),
+  });
+}
