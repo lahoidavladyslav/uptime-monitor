@@ -241,6 +241,9 @@ npm run lint && npm run typecheck && npm run build
 (`npm run gen:api`). Змінили API → `python manage.py export_openapi` → `npm run gen:api` → коміт обох файлів.
 CI падає, якщо знімок або типи застарілі (`export_openapi --check`, `git diff --exit-code`).
 
+**Production:** задайте `FRONTEND_URL` (див. `.env.example`): листи підтвердження й скидання пароля з API
+ведуть на SPA. nginx обмежує перебір на `/login|signup|…` і на `/api/v1/auth/(login|signup|…)`.
+
 Етап 1 реалізовано: вхід (з 2FA), реєстрація, підтвердження email, скидання пароля, дашборд.
 Решта екранів (сторінка монітора, форми, статус-сторінки, звіти, безпека) — етапи 2–4, поки що заглушки.
 Версії vite/vitest/msw закріплені під Node 20 (новіші мажорні вимагають Node ≥ 22.12).

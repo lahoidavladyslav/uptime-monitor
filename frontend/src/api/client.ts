@@ -1,6 +1,6 @@
 import createClient from "openapi-fetch";
 
-import { getCsrfToken } from "@/lib/csrf";
+import { ensureCsrf, getCsrfToken } from "@/lib/csrf";
 import { t } from "@/lib/strings";
 
 import { ApiError, toApiError } from "./errors";
@@ -17,9 +17,13 @@ export function createApiClient(baseUrl: string = window.location.origin) {
     fetch: (request) => globalThis.fetch(request),
   });
   client.use({
-    onRequest({ request }) {
+    async onRequest({ request }) {
       if (!SAFE_METHODS.has(request.method)) {
-        const token = getCsrfToken(); // read now, not at startup: login rotates it
+        let token = getCsrfToken(); // read now, not at startup: login rotates it
+        if (!token) {
+          await ensureCsrf(); // the cookie vanished mid-session (cleared elsewhere): get a fresh one
+          token = getCsrfToken();
+        }
         if (token) request.headers.set("X-CSRFToken", token);
       }
       return request;
