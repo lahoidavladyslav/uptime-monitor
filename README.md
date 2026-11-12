@@ -12,6 +12,23 @@ docker compose exec web python manage.py seed_demo   # demo / demo12345
 Сайт: http://localhost:8000. Листи про інциденти друкуються в лог `worker-notify`
 (`EMAIL_BACKEND=console`).
 
+## Листи в dev (реальна пошта)
+
+За замовчуванням листи (підтвердження реєстрації, скидання пароля, сповіщення) **друкуються в логи**
+(`docker compose logs web worker-notify`), на справжню пошту нічого не йде. Щоб отримувати їх на пошту,
+створіть git-ігнорований файл `.env` у корені (docker compose підхопить його):
+
+```
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USE_TLS=1
+EMAIL_HOST_USER=you@gmail.com
+EMAIL_HOST_PASSWORD=<пароль застосунку Google, не основний пароль>
+DEFAULT_FROM_EMAIL=you@gmail.com
+```
+Потім `docker compose up -d` (контейнери перечитають змінні).
+
 ## Тести
 
 ```bash

@@ -1,5 +1,8 @@
 x-app: &app
   build: .
+  env_file:
+    - path: .env        # optional: put real SMTP settings here to receive mail (see README); git-ignored
+      required: false
   environment: &env
     DATABASE_URL: postgres://uptime:uptime@db:5432/uptime
     REDIS_URL: redis://redis:6379/0

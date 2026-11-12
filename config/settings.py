@@ -114,7 +114,14 @@ LOGIN_REDIRECT_URL = "dashboard"
 LOGOUT_REDIRECT_URL = "login"
 
 EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
-DEFAULT_FROM_EMAIL = "uptime@example.com"
+# SMTP settings are read in every environment, so real mail can be tried in dev too (set EMAIL_BACKEND
+# to the smtp backend plus the EMAIL_* variables). Without them mail is printed to the console.
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "1") == "1"
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "uptime@example.com")
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")  # where the SPA lives (links in emails)
 # Where the Django-rendered pages (public status pages, subscription links) are reachable from outside.
@@ -221,12 +228,6 @@ if PRODUCTION:
     SECURE_REFERRER_POLICY = "same-origin"
     X_FRAME_OPTIONS = "DENY"
     EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
-    EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")
-    EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
-    EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
-    EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
-    EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "1") == "1"
-    DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", DEFAULT_FROM_EMAIL)
 
 # Swagger UI and the schema describe every endpoint: not for strangers in production (API_DOCS=1 re-enables).
 API_DOCS_ENABLED = os.environ.get("API_DOCS", "0" if PRODUCTION else "1") == "1"
