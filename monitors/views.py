@@ -1,7 +1,6 @@
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.core.cache import cache
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.http import HttpResponse
@@ -14,7 +13,16 @@ from django.views.generic import CreateView, DeleteView, ListView, UpdateView
 from .formkit import FormErrorMessageMixin
 from .forms import MaintenanceForm, MonitorForm, StatusPageForm
 from .models import MaintenanceWindow, Monitor, StatusPage
-from .services import PERIODS, dashboard_queryset, long_term_uptime, monitor_stats, response_time_series, uptime_percent
+from .services import (
+    PERIODS,
+    cooldown_ok,
+    dashboard_queryset,
+    long_term_uptime,
+    monitor_stats,
+    response_time_series,
+    ssl_days_left,
+    uptime_percent,
+)
 from .tasks import check_monitor, check_ssl
 
 
@@ -103,12 +111,6 @@ class MonitorDeleteView(OwnedMonitorMixin, DeleteView):
         return super().form_valid(form)
 
 
-def _ssl_days_left(monitor):
-    if monitor.ssl_expires_at is None:
-        return None
-    return max((monitor.ssl_expires_at - timezone.now()).days, 0)
-
-
 class MonitorDetailView(OwnedMonitorMixin, View):
     def get(self, request, pk):
         monitor = get_object_or_404(self.get_queryset(), pk=pk)
@@ -133,7 +135,7 @@ class MonitorDetailView(OwnedMonitorMixin, View):
                 "only_failed": only_failed,
                 "page": page,
                 "incidents": monitor.incidents.all()[:50],
-                "ssl_days_left": _ssl_days_left(monitor),
+                "ssl_days_left": ssl_days_left(monitor),
                 "uptime_30d": long_term_uptime(monitor, 30),
                 "uptime_90d": long_term_uptime(monitor, 90),
                 "windows": monitor.maintenance_windows.filter(ends_at__gt=timezone.now()).order_by("starts_at")[:10],
@@ -145,21 +147,10 @@ class MonitorDetailView(OwnedMonitorMixin, View):
         )
 
 
-def _cooldown_ok(key, seconds):
-    """cache.add is atomic: only the first caller within `seconds` gets True.
-
-    If the cache is down we fail open (better to allow a click than to 500).
-    """
-    try:
-        return cache.add(key, 1, seconds)
-    except Exception:
-        return True
-
-
 class CheckNowView(OwnedMonitorMixin, View):
     def post(self, request, pk):
         monitor = get_object_or_404(self.get_queryset(), pk=pk)
-        if not _cooldown_ok(f"check-now:{monitor.pk}", settings.CHECK_NOW_COOLDOWN_SECONDS):
+        if not cooldown_ok(f"check-now:{monitor.pk}", settings.CHECK_NOW_COOLDOWN_SECONDS):
             messages.warning(request, "Зачекайте кілька секунд перед наступною перевіркою.")
             return redirect("monitor_detail", pk=monitor.pk)
         if monitor.maintenance_windows.filter(starts_at__lte=timezone.now(), ends_at__gt=timezone.now()).exists():

@@ -1,4 +1,4 @@
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from ninja import NinjaAPI
 from ninja.errors import AuthenticationError, HttpError
 from ninja.errors import ValidationError as NinjaValidationError
@@ -30,6 +30,10 @@ def register_handlers(api: NinjaAPI) -> None:
     def unauthorized(request, exc: AuthenticationError):
         return _error(401, UNAUTHORIZED)
 
+    @api.exception_handler(Http404)
+    def not_found(request, exc):
+        return _error(404, "Не знайдено.")
+
     @api.exception_handler(HttpError)
     def http_error(request, exc: HttpError):
         # e.g. Ninja's own CSRF failure inside authenticated routes
@@ -54,7 +58,9 @@ register_handlers(api)
 from .routers.account import router as account_router  # noqa: E402
 from .routers.auth import router as auth_router  # noqa: E402
 from .routers.dashboard import router as dashboard_router  # noqa: E402
+from .routers.monitors import router as monitors_router  # noqa: E402
 
 api.add_router("/auth", auth_router, tags=["auth"])
 api.add_router("/dashboard", dashboard_router, tags=["dashboard"])
 api.add_router("/account", account_router, tags=["account"])
+api.add_router("/monitors", monitors_router, tags=["monitors"])

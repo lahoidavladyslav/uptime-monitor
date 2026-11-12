@@ -1,6 +1,118 @@
 {
   "components": {
     "schemas": {
+      "CheckOut": {
+        "properties": {
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "is_up": {
+            "title": "Is Up",
+            "type": "boolean"
+          },
+          "response_time_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Time Ms"
+          },
+          "status_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Code"
+          }
+        },
+        "required": [
+          "id",
+          "checked_at",
+          "status_code",
+          "response_time_ms",
+          "is_up",
+          "error"
+        ],
+        "title": "CheckOut",
+        "type": "object"
+      },
+      "ChecksPageOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CheckOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "pages": {
+            "title": "Pages",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "pages"
+        ],
+        "title": "ChecksPageOut",
+        "type": "object"
+      },
+      "ChecksQuery": {
+        "properties": {
+          "only_failed": {
+            "default": false,
+            "title": "Only Failed",
+            "type": "boolean"
+          },
+          "page": {
+            "default": 1,
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "default": 20,
+            "title": "Page Size",
+            "type": "integer"
+          }
+        },
+        "title": "ChecksQuery",
+        "type": "object"
+      },
       "CodeIn": {
         "properties": {
           "code": {
@@ -45,6 +157,48 @@
           "email"
         ],
         "title": "EmailIn",
+        "type": "object"
+      },
+      "IncidentOut": {
+        "properties": {
+          "first_error": {
+            "title": "First Error",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "minutes": {
+            "title": "Minutes",
+            "type": "integer"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "started_at",
+          "resolved_at",
+          "first_error",
+          "minutes"
+        ],
+        "title": "IncidentOut",
         "type": "object"
       },
       "LoginEventOut": {
@@ -104,6 +258,122 @@
           "password"
         ],
         "title": "LoginIn",
+        "type": "object"
+      },
+      "MaintenanceOut": {
+        "properties": {
+          "ends_at": {
+            "format": "date-time",
+            "title": "Ends At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "starts_at": {
+            "format": "date-time",
+            "title": "Starts At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "starts_at",
+          "ends_at",
+          "reason"
+        ],
+        "title": "MaintenanceOut",
+        "type": "object"
+      },
+      "MonitorDetailOut": {
+        "properties": {
+          "down_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Down Minutes"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ssl_days_left": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ssl Days Left"
+          },
+          "ssl_error": {
+            "title": "Ssl Error",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "up",
+              "down",
+              "unknown",
+              "maintenance",
+              "paused"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "uptime": {
+            "$ref": "#/components/schemas/UptimeOut"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "url",
+          "status",
+          "is_active",
+          "last_checked_at",
+          "ssl_days_left",
+          "ssl_error",
+          "down_minutes",
+          "uptime"
+        ],
+        "title": "MonitorDetailOut",
         "type": "object"
       },
       "MonitorRowOut": {
@@ -216,6 +486,36 @@
         "title": "ResetConfirmIn",
         "type": "object"
       },
+      "SeriesPointOut": {
+        "properties": {
+          "down": {
+            "title": "Down",
+            "type": "boolean"
+          },
+          "ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ms"
+          },
+          "t": {
+            "title": "T",
+            "type": "string"
+          }
+        },
+        "required": [
+          "t",
+          "ms",
+          "down"
+        ],
+        "title": "SeriesPointOut",
+        "type": "object"
+      },
       "SignupIn": {
         "properties": {
           "email": {
@@ -242,6 +542,77 @@
           "password2"
         ],
         "title": "SignupIn",
+        "type": "object"
+      },
+      "StatsOut": {
+        "properties": {
+          "down": {
+            "title": "Down",
+            "type": "integer"
+          },
+          "rt_avg": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rt Avg"
+          },
+          "rt_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rt Max"
+          },
+          "rt_min": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rt Min"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "up": {
+            "title": "Up",
+            "type": "integer"
+          },
+          "uptime": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uptime"
+          }
+        },
+        "required": [
+          "total",
+          "up",
+          "down",
+          "uptime",
+          "rt_avg",
+          "rt_min",
+          "rt_max"
+        ],
+        "title": "StatsOut",
         "type": "object"
       },
       "StatusOut": {
@@ -306,6 +677,62 @@
           "token"
         ],
         "title": "TokenIn",
+        "type": "object"
+      },
+      "UptimeOut": {
+        "properties": {
+          "d30": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "D30"
+          },
+          "d7": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "D7"
+          },
+          "d90": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "D90"
+          },
+          "h24": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "H24"
+          }
+        },
+        "required": [
+          "h24",
+          "d7",
+          "d30",
+          "d90"
+        ],
+        "title": "UptimeOut",
         "type": "object"
       },
       "UserOut": {
@@ -747,6 +1174,298 @@
         "summary": "Monitors with live status, uptime and sparkline",
         "tags": [
           "dashboard"
+        ]
+      }
+    },
+    "/api/v1/monitors/{monitor_id}": {
+      "get": {
+        "operationId": "api_routers_monitors_detail",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "title": "Monitor Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonitorDetailOut"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "summary": "One monitor with live status",
+        "tags": [
+          "monitors"
+        ]
+      }
+    },
+    "/api/v1/monitors/{monitor_id}/checks": {
+      "get": {
+        "operationId": "api_routers_monitors_checks",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "title": "Monitor Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "only_failed",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Only Failed",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChecksPageOut"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "summary": "Recent checks, paginated",
+        "tags": [
+          "monitors"
+        ]
+      }
+    },
+    "/api/v1/monitors/{monitor_id}/incidents": {
+      "get": {
+        "operationId": "api_routers_monitors_incidents",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "title": "Monitor Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/IncidentOut"
+                  },
+                  "title": "Response",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "summary": "Latest incidents",
+        "tags": [
+          "monitors"
+        ]
+      }
+    },
+    "/api/v1/monitors/{monitor_id}/maintenance": {
+      "get": {
+        "operationId": "api_routers_monitors_maintenance",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "title": "Monitor Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MaintenanceOut"
+                  },
+                  "title": "Response",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "summary": "Active and upcoming windows",
+        "tags": [
+          "monitors"
+        ]
+      }
+    },
+    "/api/v1/monitors/{monitor_id}/series": {
+      "get": {
+        "operationId": "api_routers_monitors_series",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "title": "Monitor Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "default": "24h",
+              "enum": [
+                "24h",
+                "7d"
+              ],
+              "title": "Period",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SeriesPointOut"
+                  },
+                  "title": "Response",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "summary": "Response-time chart points",
+        "tags": [
+          "monitors"
+        ]
+      }
+    },
+    "/api/v1/monitors/{monitor_id}/stats": {
+      "get": {
+        "operationId": "api_routers_monitors_stats",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "title": "Monitor Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "default": "24h",
+              "enum": [
+                "24h",
+                "7d"
+              ],
+              "title": "Period",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsOut"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "SessionAuth": []
+          }
+        ],
+        "summary": "Aggregates over 24h or 7d",
+        "tags": [
+          "monitors"
         ]
       }
     }

@@ -208,10 +208,159 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/monitors/{monitor_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One monitor with live status */
+        get: operations["api_routers_monitors_detail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/monitors/{monitor_id}/checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recent checks, paginated */
+        get: operations["api_routers_monitors_checks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/monitors/{monitor_id}/incidents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Latest incidents */
+        get: operations["api_routers_monitors_incidents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/monitors/{monitor_id}/maintenance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Active and upcoming windows */
+        get: operations["api_routers_monitors_maintenance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/monitors/{monitor_id}/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Response-time chart points */
+        get: operations["api_routers_monitors_series"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/monitors/{monitor_id}/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Aggregates over 24h or 7d */
+        get: operations["api_routers_monitors_stats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** CheckOut */
+        CheckOut: {
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /** Error */
+            error: string | null;
+            /** Id */
+            id: number;
+            /** Is Up */
+            is_up: boolean;
+            /** Response Time Ms */
+            response_time_ms: number | null;
+            /** Status Code */
+            status_code: number | null;
+        };
+        /** ChecksPageOut */
+        ChecksPageOut: {
+            /** Items */
+            items: components["schemas"]["CheckOut"][];
+            /** Page */
+            page: number;
+            /** Pages */
+            pages: number;
+            /** Total */
+            total: number;
+        };
+        /** ChecksQuery */
+        ChecksQuery: {
+            /**
+             * Only Failed
+             * @default false
+             */
+            only_failed: boolean;
+            /**
+             * Page
+             * @default 1
+             */
+            page: number;
+            /**
+             * Page Size
+             * @default 20
+             */
+            page_size: number;
+        };
         /** CodeIn */
         CodeIn: {
             /** Code */
@@ -227,6 +376,22 @@ export interface components {
         EmailIn: {
             /** Email */
             email: string;
+        };
+        /** IncidentOut */
+        IncidentOut: {
+            /** First Error */
+            first_error: string;
+            /** Id */
+            id: number;
+            /** Minutes */
+            minutes: number;
+            /** Resolved At */
+            resolved_at: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
         };
         /** LoginEventOut */
         LoginEventOut: {
@@ -250,6 +415,48 @@ export interface components {
             password: string;
             /** Username */
             username: string;
+        };
+        /** MaintenanceOut */
+        MaintenanceOut: {
+            /**
+             * Ends At
+             * Format: date-time
+             */
+            ends_at: string;
+            /** Id */
+            id: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Starts At
+             * Format: date-time
+             */
+            starts_at: string;
+        };
+        /** MonitorDetailOut */
+        MonitorDetailOut: {
+            /** Down Minutes */
+            down_minutes: number | null;
+            /** Id */
+            id: number;
+            /** Is Active */
+            is_active: boolean;
+            /** Last Checked At */
+            last_checked_at: string | null;
+            /** Name */
+            name: string;
+            /** Ssl Days Left */
+            ssl_days_left: number | null;
+            /** Ssl Error */
+            ssl_error: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "up" | "down" | "unknown" | "maintenance" | "paused";
+            uptime: components["schemas"]["UptimeOut"];
+            /** Url */
+            url: string;
         };
         /** MonitorRowOut */
         MonitorRowOut: {
@@ -282,6 +489,15 @@ export interface components {
             /** Uid */
             uid: string;
         };
+        /** SeriesPointOut */
+        SeriesPointOut: {
+            /** Down */
+            down: boolean;
+            /** Ms */
+            ms: number | null;
+            /** T */
+            t: string;
+        };
         /** SignupIn */
         SignupIn: {
             /** Email */
@@ -292,6 +508,23 @@ export interface components {
             password2: string;
             /** Username */
             username: string;
+        };
+        /** StatsOut */
+        StatsOut: {
+            /** Down */
+            down: number;
+            /** Rt Avg */
+            rt_avg: number | null;
+            /** Rt Max */
+            rt_max: number | null;
+            /** Rt Min */
+            rt_min: number | null;
+            /** Total */
+            total: number;
+            /** Up */
+            up: number;
+            /** Uptime */
+            uptime: number | null;
         };
         /** StatusOut */
         StatusOut: {
@@ -317,6 +550,17 @@ export interface components {
         TokenIn: {
             /** Token */
             token: string;
+        };
+        /** UptimeOut */
+        UptimeOut: {
+            /** D30 */
+            d30: number | null;
+            /** D7 */
+            d7: number | null;
+            /** D90 */
+            d90: number | null;
+            /** H24 */
+            h24: number | null;
         };
         /** UserOut */
         UserOut: {
@@ -602,6 +846,146 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DashboardOut"];
+                };
+            };
+        };
+    };
+    api_routers_monitors_detail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitor_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MonitorDetailOut"];
+                };
+            };
+        };
+    };
+    api_routers_monitors_checks: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                only_failed?: boolean;
+            };
+            header?: never;
+            path: {
+                monitor_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChecksPageOut"];
+                };
+            };
+        };
+    };
+    api_routers_monitors_incidents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitor_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentOut"][];
+                };
+            };
+        };
+    };
+    api_routers_monitors_maintenance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                monitor_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceOut"][];
+                };
+            };
+        };
+    };
+    api_routers_monitors_series: {
+        parameters: {
+            query?: {
+                period?: "24h" | "7d";
+            };
+            header?: never;
+            path: {
+                monitor_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeriesPointOut"][];
+                };
+            };
+        };
+    };
+    api_routers_monitors_stats: {
+        parameters: {
+            query?: {
+                period?: "24h" | "7d";
+            };
+            header?: never;
+            path: {
+                monitor_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatsOut"];
                 };
             };
         };

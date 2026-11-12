@@ -205,7 +205,7 @@ def sparklines(monitor_ids, now=None):
     return result
 
 
-def _status(m):
+def monitor_status(m):
     if not m.is_active:
         return "paused"
     if m.in_maintenance:
@@ -223,7 +223,7 @@ def dashboard_rows(user, now=None):
         DashboardRow(
             id=m.pk,
             name=m.name,
-            status=_status(m),
+            status=monitor_status(m),
             last_checked_at=m.last_checked_at,
             uptime_24h=uptime_percent(m.checks_24h, m.up_24h),
             down_minutes=int((now - m.down_since).total_seconds() // 60) if m.down_since else None,
@@ -239,3 +239,22 @@ def summarize(rows):
         counts[r.status] += 1
     counts["open_incidents"] = sum(1 for r in rows if r.down_minutes is not None)
     return counts
+
+
+def ssl_days_left(monitor):
+    if monitor.ssl_expires_at is None:
+        return None
+    return max((monitor.ssl_expires_at - timezone.now()).days, 0)
+
+
+def cooldown_ok(key, seconds):
+    """cache.add is atomic: only the first caller within `seconds` gets True.
+
+    If the cache is down we fail open (better to allow a click than to 500).
+    """
+    from django.core.cache import cache
+
+    try:
+        return cache.add(key, 1, seconds)
+    except Exception:
+        return True
