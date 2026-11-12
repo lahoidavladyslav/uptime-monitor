@@ -44,7 +44,7 @@ def test_confirmation_link_tampered_or_expired(client, db, settings):
     link = confirm_link()
     assert client.get(link[:-3] + "x/").status_code == 400
     assert User.objects.get(username="carol").is_active is False
-    import accounts.views as v
+    import accounts.services as v
 
     v.CONFIRM_MAX_AGE = -1  # everything is expired
     try:

@@ -2,7 +2,7 @@ from django.contrib.auth import logout
 from django.middleware.csrf import get_token
 from ninja import Router
 
-from accounts.models import TOTPDevice
+from accounts.services import has_two_factor
 
 from ..deps import session_auth
 from ..schemas import StatusOut, UserOut
@@ -23,7 +23,7 @@ def me(request):
         "id": user.id,
         "username": user.username,
         "email": user.email,
-        "has_2fa": TOTPDevice.objects.filter(user=user, confirmed=True).exists(),
+        "has_2fa": has_two_factor(user),
     }
 
 
