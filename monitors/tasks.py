@@ -1,6 +1,6 @@
 import logging
 import time
-from datetime import timedelta
+from datetime import UTC, timedelta
 from smtplib import SMTPException
 
 import requests
@@ -8,11 +8,12 @@ from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
 from django.db import IntegrityError, transaction
-from django.db.models import DateTimeField, DurationField, ExpressionWrapper, F, Q, Value
+from django.db.models import DateTimeField, DurationField, Exists, ExpressionWrapper, F, OuterRef, Q, Value
 from django.utils import timezone
 
+from .checks import MAX_BODY_BYTES, evaluate
 from .http_client import guarded_session
-from .models import CheckResult, Incident, Monitor
+from .models import CheckResult, Incident, MaintenanceWindow, Monitor
 from .security import blocked_reason
 
 logger = logging.getLogger(__name__)
@@ -22,12 +23,18 @@ logger = logging.getLogger(__name__)
 DUE_SLACK = timedelta(seconds=10)
 
 
+def under_maintenance(now):
+    """Exists() subquery: the monitor has a maintenance window covering `now`."""
+    return Exists(MaintenanceWindow.objects.filter(monitor=OuterRef("pk"), starts_at__lte=now, ends_at__gt=now))
+
+
 def due_monitors(now=None):
-    """Active monitors whose next check is due. Filtering happens in SQL."""
+    """Active, not-in-maintenance monitors whose next check is due. Filtering happens in SQL."""
     now = now or timezone.now()
     one_second = Value(timedelta(seconds=1), output_field=DurationField())
     return (
         Monitor.objects.filter(is_active=True)
+        .exclude(under_maintenance(now))
         .annotate(
             due_at=ExpressionWrapper(
                 F("last_checked_at") + F("interval_seconds") * one_second,
@@ -46,31 +53,46 @@ def schedule_checks():
     return len(ids)
 
 
-def perform_http_check(url):
+def _read_body(response, deadline):
+    """Read at most MAX_BODY_BYTES and never longer than the overall deadline (slow-drip servers)."""
+    chunks, size = [], 0
+    for chunk in response.iter_content(chunk_size=8192):
+        chunks.append(chunk)
+        size += len(chunk)
+        if size >= MAX_BODY_BYTES or time.monotonic() > deadline:
+            break
+    return b"".join(chunks)[:MAX_BODY_BYTES].decode(response.encoding or "utf-8", errors="replace")
+
+
+def perform_http_check(url, *, method="GET", headers=None, body="", expected_status="", expected_text=""):
     """Returns (status_code, response_time_ms, is_up, error). Never raises."""
     reason = blocked_reason(url)
     if reason:
         return None, None, False, f"Заблоковано: {reason}"
+    timeout = settings.CHECK_TIMEOUT_SECONDS
     started = time.monotonic()
+    request_headers = {"User-Agent": "UptimeMonitor/1.0", **(headers or {})}
     try:
-        # allow_redirects=False: 3xx counts as "up" per spec, we don't chase it.
-        # stream=True: we only need the headers, not the body.
+        # allow_redirects=False: 3xx counts as "up" by default, we don't chase it.
+        # stream=True: headers first; the body is read only when we must search it for text.
         with (
             guarded_session() as session,
-            session.get(
+            session.request(
+                method,
                 url,
-                timeout=settings.CHECK_TIMEOUT_SECONDS,
+                timeout=timeout,
                 allow_redirects=False,
                 stream=True,
-                headers={"User-Agent": "UptimeMonitor/1.0"},
+                headers=request_headers,
+                data=body.encode() if body and method == "POST" else None,
             ) as response,
         ):
             elapsed = round((time.monotonic() - started) * 1000)
-            code = response.status_code
-            is_up = 200 <= code < 400
-            return code, elapsed, is_up, None if is_up else f"HTTP {code}"
+            body_text = _read_body(response, started + timeout) if expected_text and method != "HEAD" else ""
+            is_up, error = evaluate(response.status_code, expected_status, expected_text, body_text)
+            return response.status_code, elapsed, is_up, error
     except requests.Timeout:
-        return None, None, False, f"Timeout after {settings.CHECK_TIMEOUT_SECONDS}s"
+        return None, None, False, f"Timeout after {timeout}s"
     except requests.RequestException as exc:
         if "non-public address" in str(exc):  # raised by the connection-level SSRF guard
             return None, None, False, "Заблоковано: адреса веде у приватну/внутрішню мережу"
@@ -111,7 +133,7 @@ def claim_monitor(monitor_id, force):
     HTTP request below runs outside any transaction.
     """
     now = timezone.now()
-    qs = Monitor.objects.filter(pk=monitor_id, is_active=True)
+    qs = Monitor.objects.filter(pk=monitor_id, is_active=True).exclude(under_maintenance(now))
     if not force:
         qs = qs.filter(pk__in=due_monitors(now).values("pk"))
     # queryset.update(): no post_save, so the public-page cache isn't dropped by every check.
@@ -130,10 +152,21 @@ def check_monitor(monitor_id, force=False):
     if not claimed:
         return "skipped"
 
-    url = Monitor.objects.filter(pk=monitor_id).values_list("url", flat=True).first()
-    if url is None:
+    cfg = (
+        Monitor.objects.filter(pk=monitor_id)
+        .values("url", "http_method", "request_headers", "request_body", "expected_status", "expected_text")
+        .first()
+    )
+    if cfg is None:
         return "skipped"
-    status_code, elapsed, is_up, error = perform_http_check(url)
+    status_code, elapsed, is_up, error = perform_http_check(
+        cfg["url"],
+        method=cfg["http_method"],
+        headers=cfg["request_headers"],
+        body=cfg["request_body"],
+        expected_status=cfg["expected_status"],
+        expected_text=cfg["expected_text"],
+    )
 
     with transaction.atomic():
         # Short lock, only for writing: serialises incident open/close per monitor.
@@ -199,3 +232,108 @@ def cleanup_old_checks():
         deleted, _ = CheckResult.objects.filter(pk__in=ids).delete()
         total += deleted
     return total
+
+
+# ----------------------------- SSL certificate expiry -----------------------------
+SSL_THRESHOLDS = (14, 3, 0)  # alert once when each is crossed
+
+
+def fetch_ssl_expiry(host, port=443):
+    """Returns the certificate's notAfter as an aware datetime. Raises ssl.SSLError / OSError."""
+    import socket
+    import ssl
+    from datetime import datetime
+
+    from .http_client import _guard
+
+    ctx = ssl.create_default_context()
+    with socket.create_connection((host, port), timeout=settings.CHECK_TIMEOUT_SECONDS) as raw:
+        _guard(raw)  # same SSRF protection as for HTTP checks
+        with ctx.wrap_socket(raw, server_hostname=host) as tls:
+            not_after = tls.getpeercert()["notAfter"]
+    return datetime.fromtimestamp(ssl.cert_time_to_seconds(not_after), tz=UTC)
+
+
+def ssl_level(days_left):
+    """Which alert threshold is currently crossed (smallest one), or None."""
+    crossed = [t for t in SSL_THRESHOLDS if days_left <= t]
+    return min(crossed) if crossed else None
+
+
+@shared_task
+def schedule_ssl_checks():
+    ids = list(Monitor.objects.filter(is_active=True, url__istartswith="https://").values_list("pk", flat=True))
+    for monitor_id in ids:
+        check_ssl.delay(monitor_id)
+    return len(ids)
+
+
+@shared_task
+def check_ssl(monitor_id):
+    import ssl
+    from urllib.parse import urlsplit
+
+    monitor = Monitor.objects.filter(pk=monitor_id, url__istartswith="https://").first()
+    if monitor is None:
+        return "skipped"
+    parts = urlsplit(monitor.url)
+    if blocked_reason(monitor.url):
+        return "blocked"
+    now = timezone.now()
+    try:
+        expires = fetch_ssl_expiry(parts.hostname, parts.port or 443)
+    except ssl.SSLCertVerificationError as exc:
+        expired = "expired" in str(exc).lower()
+        Monitor.objects.filter(pk=monitor.pk).update(
+            ssl_error="Сертифікат прострочений" if expired else f"Помилка сертифіката: {exc.verify_message}"[:200],
+            ssl_expires_at=now if expired else None,
+        )
+        if expired:
+            _maybe_alert(monitor, 0)
+        return "invalid"
+    except (OSError, ssl.SSLError) as exc:
+        Monitor.objects.filter(pk=monitor.pk).update(ssl_error=f"{type(exc).__name__}"[:200])
+        return "error"
+
+    days_left = (expires - now).days if expires > now else 0
+    Monitor.objects.filter(pk=monitor.pk).update(ssl_expires_at=expires, ssl_error="")
+    _maybe_alert(monitor, ssl_level(days_left), days_left)
+    return days_left
+
+
+def _maybe_alert(monitor, level, days_left=0):
+    """One mail per threshold: 14d -> 3d -> expired. Renewal resets the state."""
+    if level is None:
+        if monitor.ssl_alerted_level is not None:
+            Monitor.objects.filter(pk=monitor.pk).update(ssl_alerted_level=None)
+        return
+    if monitor.ssl_alerted_level is None or level < monitor.ssl_alerted_level:
+        # conditional update = atomic claim, so two workers can't both send
+        claimed = (
+            Monitor.objects.filter(pk=monitor.pk)
+            .filter(Q(ssl_alerted_level__isnull=True) | Q(ssl_alerted_level__gt=level))
+            .update(ssl_alerted_level=level)
+        )
+        if claimed:
+            send_ssl_alert.delay(monitor.pk, days_left)
+
+
+@shared_task(
+    autoretry_for=(SMTPException, OSError),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=3,
+)
+def send_ssl_alert(monitor_id, days_left):
+    monitor = Monitor.objects.select_related("user").filter(pk=monitor_id).first()
+    if monitor is None or not monitor.user.email:
+        return "skipped"
+    if days_left <= 0:
+        subject = f"🔴 SSL-сертифікат {monitor.name} прострочений"
+        body = f"Сертифікат сайту «{monitor.name}» ({monitor.url}) прострочений."
+    else:
+        subject = f"⚠️ SSL-сертифікат {monitor.name} спливає через {days_left} дн."
+        body = f"Сертифікат сайту «{monitor.name}» ({monitor.url}) діє ще {days_left} дн. Оновіть його."
+    send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [monitor.user.email])
+    return "sent"

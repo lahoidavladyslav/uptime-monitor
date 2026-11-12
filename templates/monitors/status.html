@@ -13,7 +13,7 @@
 <body class="bg-light"><main class="container py-5" style="max-width:720px">
   <h1 class="h3">{{ name }}</h1>
   <p class="h5">
-    {% if is_up is None %}⚪ Ще немає даних{% elif is_up %}🟢 Працює{% else %}🔴 Недоступний{% endif %}
+    {% if maintenance %}🛠 Планові роботи{% elif is_up is None %}⚪ Ще немає даних{% elif is_up %}🟢 Працює{% else %}🔴 Недоступний{% endif %}
   </p>
   <p>Uptime за 7 днів: <strong>{% if uptime is None %}немає даних{% else %}{{ uptime }}%{% endif %}</strong></p>
   <div class="bar">

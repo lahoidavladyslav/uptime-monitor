@@ -21,6 +21,23 @@ class Monitor(models.Model):
     last_checked_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # --- advanced check configuration ---
+    METHOD_CHOICES = [("GET", "GET"), ("HEAD", "HEAD"), ("POST", "POST")]
+    http_method = models.CharField("Метод", max_length=4, choices=METHOD_CHOICES, default="GET")
+    request_headers = models.JSONField("Заголовки", default=dict, blank=True)
+    request_body = models.TextField("Тіло запиту", blank=True, default="", max_length=10_000)
+    expected_status = models.CharField(
+        "Очікувані коди", max_length=100, blank=True, default="", help_text="Напр. 200,204,300-399. Порожньо = 2xx/3xx."
+    )
+    expected_text = models.CharField(
+        "Очікуваний текст", max_length=200, blank=True, default="", help_text="Має бути у тілі відповіді."
+    )
+
+    # --- SSL certificate expiry (filled by a daily task) ---
+    ssl_expires_at = models.DateTimeField(null=True, blank=True)
+    ssl_error = models.CharField(max_length=200, blank=True, default="")
+    ssl_alerted_level = models.PositiveSmallIntegerField(null=True, blank=True)  # smallest threshold already mailed
+
     class Meta:
         ordering = ["name", "id"]
         constraints = [
@@ -79,3 +96,20 @@ class Incident(models.Model):
     @property
     def is_open(self):
         return self.resolved_at is None
+
+
+class MaintenanceWindow(models.Model):
+    """Planned maintenance: no checks run, so the period doesn't count as downtime."""
+
+    monitor = models.ForeignKey(Monitor, on_delete=models.CASCADE, related_name="maintenance_windows")
+    starts_at = models.DateTimeField("Початок")
+    ends_at = models.DateTimeField("Кінець")
+    reason = models.CharField("Причина", max_length=200, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-starts_at"]
+        constraints = [
+            models.CheckConstraint(condition=Q(ends_at__gt=models.F("starts_at")), name="maintenance_ends_after_start"),
+        ]
+        indexes = [models.Index(fields=["monitor", "starts_at", "ends_at"], name="maint_monitor_range_idx")]

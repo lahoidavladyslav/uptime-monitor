@@ -93,11 +93,11 @@ def test_http_request_runs_outside_a_transaction(monitor, monkeypatch):
 
     original = tasks.perform_http_check
 
-    def spy(url):
+    def spy(url, **kw):
         # The test itself runs in one outer transaction; check_monitor opening its own
         # atomic() block would add a savepoint. None must be open during the request.
         seen["savepoints"] = list(connection.savepoint_ids)
-        return original(url)
+        return original(url, **kw)
 
     monkeypatch.setattr(tasks, "perform_http_check", spy)
     assert check_monitor(monitor.pk) == "up"
@@ -113,9 +113,9 @@ def test_concurrent_duplicate_during_request_is_skipped(monitor, monkeypatch):
     original = tasks.perform_http_check
     inner = {}
 
-    def spy(url):
+    def spy(url, **kw):
         inner["result"] = check_monitor(monitor.pk)  # the "duplicate"
-        return original(url)
+        return original(url, **kw)
 
     monkeypatch.setattr(tasks, "perform_http_check", spy)
     assert check_monitor(monitor.pk) == "up"
@@ -130,9 +130,9 @@ def test_monitor_deleted_mid_request_is_handled(monitor, monkeypatch):
 
     original = tasks.perform_http_check
 
-    def spy(url):
+    def spy(url, **kw):
         Monitor.objects.filter(pk=monitor.pk).delete()
-        return original(url)
+        return original(url, **kw)
 
     monkeypatch.setattr(tasks, "perform_http_check", spy)
     assert check_monitor(monitor.pk) == "skipped"
