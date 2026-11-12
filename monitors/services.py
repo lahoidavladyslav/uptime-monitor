@@ -1,5 +1,6 @@
 """Read-side helpers: all numbers are computed by the database."""
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 
 from django.db.models import Avg, Count, Max, Min, Q
@@ -142,3 +143,99 @@ def long_term_uptime(monitor, days):
     since = timezone.now() - timedelta(days=days)
     agg = monitor.hourly_stats.filter(hour__gte=since).aggregate(total=Sum("total"), up=Sum("up"))
     return uptime_percent(agg["total"] or 0, agg["up"] or 0)
+
+
+# ----------------------------- dashboard (shared by the Django page and the JSON API) -----------------------------
+@dataclass(frozen=True)
+class DashboardRow:
+    id: int
+    name: str
+    status: str  # up | down | unknown | maintenance | paused
+    last_checked_at: datetime | None
+    uptime_24h: float | None
+    down_minutes: int | None
+    spark: list[int | None]
+
+
+def dashboard_queryset(user, now=None):
+    """All per-monitor numbers for the dashboard in ONE query (Subquery + Count(filter=...))."""
+    from django.db.models import OuterRef, Subquery
+
+    from .models import Monitor
+    from .tasks import under_maintenance
+
+    now = now or timezone.now()
+    since = now - timedelta(hours=24)
+    latest = CheckResult.objects.filter(monitor=OuterRef("pk")).order_by("-checked_at")
+    open_incident = Incident.objects.filter(monitor=OuterRef("pk"), resolved_at__isnull=True)
+    return Monitor.objects.filter(user=user).annotate(
+        last_is_up=Subquery(latest.values("is_up")[:1]),
+        down_since=Subquery(open_incident.values("started_at")[:1]),
+        in_maintenance=under_maintenance(now),
+        checks_24h=Count("checks", filter=Q(checks__checked_at__gte=since)),
+        up_24h=Count("checks", filter=Q(checks__checked_at__gte=since, checks__is_up=True)),
+    )
+
+
+def sparklines(monitor_ids, now=None):
+    """{monitor_id: 24 hourly average response times (ms), oldest -> newest, None = no timing}.
+
+    One grouped query for all monitors; the last value is the current (partial) hour.
+    """
+    ids = list(monitor_ids)
+    if not ids:
+        return {}
+    now = now or timezone.now()
+    last_hour = now.replace(minute=0, second=0, microsecond=0)
+    hours = [last_hour - timedelta(hours=23 - i) for i in range(24)]
+    rows = (
+        CheckResult.objects.filter(monitor_id__in=ids, checked_at__gte=hours[0])
+        .annotate(hour=TruncHour("checked_at"))
+        .values("monitor_id", "hour")
+        .annotate(avg_ms=Avg("response_time_ms"))
+    )
+    found = {(r["monitor_id"], r["hour"]): r["avg_ms"] for r in rows}
+    result = {}
+    for mid in ids:
+        series = []
+        for h in hours:
+            avg = found.get((mid, h))
+            series.append(None if avg is None else round(avg))
+        result[mid] = series
+    return result
+
+
+def _status(m):
+    if not m.is_active:
+        return "paused"
+    if m.in_maintenance:
+        return "maintenance"
+    if m.last_is_up is None:
+        return "unknown"
+    return "up" if m.last_is_up else "down"
+
+
+def dashboard_rows(user, now=None):
+    now = now or timezone.now()
+    monitors = list(dashboard_queryset(user, now))
+    sparks = sparklines([m.pk for m in monitors], now)
+    return [
+        DashboardRow(
+            id=m.pk,
+            name=m.name,
+            status=_status(m),
+            last_checked_at=m.last_checked_at,
+            uptime_24h=uptime_percent(m.checks_24h, m.up_24h),
+            down_minutes=int((now - m.down_since).total_seconds() // 60) if m.down_since else None,
+            spark=sparks[m.pk],
+        )
+        for m in monitors
+    ]
+
+
+def summarize(rows):
+    counts = {"up": 0, "down": 0, "unknown": 0, "maintenance": 0, "paused": 0}
+    for r in rows:
+        counts[r.status] += 1
+    counts["open_incidents"] = sum(1 for r in rows if r.down_minutes is not None)
+    return counts
