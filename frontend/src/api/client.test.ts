@@ -82,3 +82,36 @@ describe("api client", () => {
     expect([err.status, err.message]).toEqual([0, t.errors.network]);
   });
 });
+
+describe("api client without a CSRF cookie", () => {
+  it("fetches the cookie first, then sends the token (cookie cleared mid-session)", async () => {
+    const order: string[] = [];
+    server.use(
+      http.get("*/api/v1/auth/csrf", () => {
+        order.push("csrf");
+        document.cookie = "csrftoken=fresh-token";
+        return HttpResponse.json({ status: "ok" });
+      }),
+      http.post("*/api/v1/auth/login", ({ request }) => {
+        order.push(`login:${request.headers.get("X-CSRFToken")}`);
+        return HttpResponse.json({ status: "ok" });
+      }),
+    );
+    expect(document.cookie).not.toContain("csrftoken"); // the other tab cleared it
+    await unwrap(client.POST("/api/v1/auth/login", LOGIN));
+    expect(order).toEqual(["csrf", "login:fresh-token"]);
+  });
+
+  it("does not fetch it when the cookie exists, nor for GET requests", async () => {
+    let csrfCalls = 0;
+    server.use(
+      http.get("*/api/v1/auth/csrf", () => ((csrfCalls += 1), HttpResponse.json({ status: "ok" }))),
+      http.get("*/api/v1/auth/me", () => HttpResponse.json({ id: 1, username: "a", email: "a@a.a", has_2fa: false })),
+    );
+    await unwrap(client.GET("/api/v1/auth/me")); // GET without cookie: no token needed
+    document.cookie = "csrftoken=have-it";
+    server.use(http.post("*/api/v1/auth/login", () => HttpResponse.json({ status: "ok" })));
+    await unwrap(client.POST("/api/v1/auth/login", LOGIN));
+    expect(csrfCalls).toBe(0);
+  });
+});
