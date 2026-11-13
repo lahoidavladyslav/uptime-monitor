@@ -88,6 +88,7 @@ LANGUAGE_CODE = "uk"
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
+FORMS_URLFIELD_ASSUME_HTTPS = True  # Django 6 default; silences the transitional warning of the admin URL fields
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
