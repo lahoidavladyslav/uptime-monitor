@@ -7,6 +7,7 @@ from django.core import mail
 
 from monitors.models import Incident, Monitor, OutboxEvent, Subscriber, WebhookEndpoint
 from monitors.tasks import record_check
+from monitors.tests.helpers import outcome
 
 T0 = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
@@ -22,9 +23,7 @@ def run(django_capture_on_commit_callbacks):
 
     def flip(m, minute, is_up):
         with django_capture_on_commit_callbacks(execute=True):
-            record_check(
-                m.pk, "eu", T0 + timedelta(minutes=minute), 200 if is_up else 503, 10, is_up, None if is_up else "boom"
-            )
+            record_check(m.pk, "eu", T0 + timedelta(minutes=minute), outcome(is_up))
 
     return flip
 

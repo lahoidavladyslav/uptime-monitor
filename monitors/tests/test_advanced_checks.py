@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError
 from django.urls import reverse
 from django.utils import timezone
 
-from monitors.checks import evaluate, headers_to_lines, parse_header_lines, parse_status_spec, status_ok
+from monitors.checks import headers_to_lines, parse_header_lines, parse_status_spec, status_ok
 from monitors.forms import MaintenanceForm, MonitorForm
 from monitors.models import CheckResult, Incident, MaintenanceWindow, Monitor
 from monitors.tasks import (
@@ -54,14 +54,6 @@ def test_headers_parse_roundtrip_and_rules():
         parse_header_lines("\n".join(f"H{i}: v" for i in range(11)))
 
 
-def test_evaluate_messages():
-    assert evaluate(200, "", "", "") == (True, None)
-    assert evaluate(500, "", "", "") == (False, "HTTP 500")
-    assert evaluate(404, "200,204", "", "") == (False, "Очікувався код 200,204, отримано 404")
-    assert evaluate(200, "", "welcome", "hello welcome") == (True, None)
-    assert evaluate(200, "", "welcome", "an empty page") == (False, "Очікуваний текст не знайдено у відповіді")
-
-
 # ---------------- HTTP behaviour ----------------
 @responses.activate
 def test_method_headers_and_body_are_sent():
@@ -69,7 +61,7 @@ def test_method_headers_and_body_are_sent():
     out = perform_http_check(
         URL, method="POST", headers={"X-Api-Key": "k", "Content-Type": "application/json"}, body='{"a":1}'
     )
-    assert out[2] is True
+    assert out.is_up is True
     req = responses.calls[0].request
     assert req.method == "POST" and req.body == b'{"a":1}'
     assert req.headers["X-Api-Key"] == "k" and req.headers["User-Agent"] == "UptimeMonitor/1.0"
@@ -78,46 +70,68 @@ def test_method_headers_and_body_are_sent():
 @responses.activate
 def test_head_does_not_send_body_or_read_it():
     responses.add(responses.HEAD, URL, status=200)
-    assert perform_http_check(URL, method="HEAD", body="ignored")[2] is True
+    assert perform_http_check(URL, method="HEAD", body="ignored").is_up is True
     assert responses.calls[0].request.body is None
 
 
+KEYWORD = {"keyword": "Welcome", "must_contain": True}
+
+
 @responses.activate
-def test_expected_text_present_and_missing():
+def test_keyword_present_and_missing():
     responses.add(responses.GET, URL, body="<h1>Welcome back</h1>", status=200)
-    assert perform_http_check(URL, expected_text="Welcome")[2] is True
-    up = perform_http_check(URL, expected_text="Maintenance")
-    assert up[2] is False and "не знайдено" in up[3]
-    assert up[0] == 200  # server answered 200 but the content is wrong -> still down
+    assert perform_http_check(URL, check_type="keyword", check_config=KEYWORD).is_up is True
+    out = perform_http_check(URL, check_type="keyword", check_config={"keyword": "Maintenance", "must_contain": True})
+    assert out.is_up is False and out.error == "keyword 'Maintenance' not found"
+    assert out.status_code == 200  # server answered 200 but the content is wrong -> still down
+    assert out.details["type"] == "keyword"
 
 
 @responses.activate
-def test_expected_text_search_is_capped(monkeypatch):
+def test_keyword_search_is_capped_and_says_it_was_truncated(monkeypatch):
     monkeypatch.setattr("monitors.tasks.MAX_BODY_BYTES", 100)
     responses.add(responses.GET, URL, body="a" * 200 + "NEEDLE", status=200)
-    assert perform_http_check(URL, expected_text="NEEDLE")[2] is False  # beyond the cap
+    out = perform_http_check(URL, check_type="keyword", check_config={"keyword": "NEEDLE", "must_contain": True})
+    assert out.is_up is False and "truncated" in out.error  # beyond the cap
 
 
 @responses.activate
-def test_expected_status_overrides_default():
+def test_a_huge_body_is_not_read_for_a_plain_status_check(monkeypatch):
+    read = []
+    monkeypatch.setattr("monitors.tasks._read_body", lambda *a, **k: read.append(1) or ("", False))
+    responses.add(responses.GET, URL, body="x" * 1000, status=200)
+    assert perform_http_check(URL).is_up is True and read == []
+
+
+@responses.activate
+def test_json_path_through_the_real_request_path():
+    responses.add(responses.GET, URL, json={"status": {"db": "degraded"}}, status=200)
+    out = perform_http_check(URL, check_type="json_path", check_config={"path": "status.db", "equals": "ok"})
+    assert not out.is_up and out.error == "status.db = 'degraded', expected 'ok'"
+
+
+@responses.activate
+def test_expected_statuses_override_the_default():
     responses.add(responses.GET, URL, status=401)
-    assert perform_http_check(URL)[2] is False
-    assert perform_http_check(URL, expected_status="401")[2] is True
+    assert perform_http_check(URL).is_up is False
+    assert perform_http_check(URL, check_config={"expected_statuses": [401]}).is_up is True
     responses.replace(responses.GET, URL, status=200)
-    out = perform_http_check(URL, expected_status="401")
-    assert out[2] is False and "Очікувався код 401" in out[3]
+    out = perform_http_check(URL, check_config={"expected_statuses": [401]})
+    assert out.is_up is False and out.error == "HTTP 200, expected one of [401]"
 
 
 @responses.activate
 def test_check_monitor_uses_the_monitor_configuration(user):
     m = Monitor.objects.create(
         user=user, name="api", url=URL, http_method="POST", request_headers={"X-A": "1"},
-        request_body="ping", expected_status="201", expected_text="created",
+        request_body="ping", check_type="keyword",
+        check_config={"keyword": "created", "must_contain": True, "expected_statuses": [201]},
     )  # fmt: skip
     responses.add(responses.POST, URL, status=201, body="resource created")
     assert check_monitor(m.pk) == "up"
     assert responses.calls[0].request.headers["X-A"] == "1"
-    assert CheckResult.objects.get().status_code == 201
+    result = CheckResult.objects.get()
+    assert result.status_code == 201 and result.details["type"] == "keyword"
 
 
 # ---------------- form ----------------

@@ -56,14 +56,3 @@ def parse_header_lines(text):
 
 def headers_to_lines(headers):
     return "\n".join(f"{k}: {v}" for k, v in (headers or {}).items())
-
-
-def evaluate(code, spec, expected_text, body_text):
-    """Returns (is_up, error)."""
-    if not status_ok(code, spec):
-        if parse_status_spec(spec):
-            return False, f"Очікувався код {spec.strip()}, отримано {code}"
-        return False, f"HTTP {code}"
-    if expected_text and expected_text not in (body_text or ""):
-        return False, "Очікуваний текст не знайдено у відповіді"
-    return True, None

@@ -3,6 +3,7 @@ import logging
 import time
 from datetime import UTC, timedelta
 from smtplib import SMTPException
+from typing import NamedTuple
 
 import requests
 from celery import shared_task
@@ -13,8 +14,8 @@ from django.db.models import DateTimeField, DurationField, ExpressionWrapper, F,
 from django.urls import reverse
 from django.utils import timezone
 
-from . import async_checks, maintenance, partitions, regions, rollups, subscriptions, webhooks
-from .checks import MAX_BODY_BYTES, evaluate
+from . import async_checks, check_types, maintenance, partitions, regions, rollups, subscriptions, webhooks
+from .checks import MAX_BODY_BYTES
 from .http_client import guarded_session
 from .models import (
     CheckResult,
@@ -105,27 +106,47 @@ def schedule_checks():
 
 
 def _read_body(response, deadline):
-    """Read at most MAX_BODY_BYTES and never longer than the overall deadline (slow-drip servers)."""
-    chunks, size = [], 0
+    """Read at most MAX_BODY_BYTES and never longer than the overall deadline (slow-drip servers).
+
+    Returns (text, truncated): `truncated` means we stopped before the end of the body, so "not found" in it
+    proves less than usual and the check reports that.
+    """
+    chunks, size, truncated = [], 0, False
     for chunk in response.iter_content(chunk_size=8192):
         chunks.append(chunk)
         size += len(chunk)
         if size >= MAX_BODY_BYTES or time.monotonic() > deadline:
+            truncated = True
             break
-    return b"".join(chunks)[:MAX_BODY_BYTES].decode(response.encoding or "utf-8", errors="replace")
+    text = b"".join(chunks)[:MAX_BODY_BYTES].decode(response.encoding or "utf-8", errors="replace")
+    return text, truncated
 
 
-def perform_http_check(url, *, method="GET", headers=None, body="", expected_status="", expected_text=""):
-    """Returns (status_code, response_time_ms, is_up, error). Never raises."""
+class CheckOutcome(NamedTuple):
+    status_code: int | None
+    response_time_ms: int | None
+    is_up: bool
+    error: str | None
+    details: dict
+
+
+def _failed(message, **details):
+    return CheckOutcome(None, None, False, message, {"message": message, **details})
+
+
+def perform_http_check(url, *, method="GET", headers=None, body="", check_type="http_status", check_config=None):
+    """Run one HTTP check of any type. Returns a CheckOutcome. Never raises."""
+    strategy = check_types.get(check_type)
+    config = check_config or {}
     reason = blocked_reason(url)
     if reason:
-        return None, None, False, f"Заблоковано: {reason}"
+        return _failed(f"Заблоковано: {reason}", type=check_type)
     timeout = settings.CHECK_TIMEOUT_SECONDS
     started = time.monotonic()
     request_headers = {"User-Agent": "UptimeMonitor/1.0", **(headers or {})}
     try:
         # allow_redirects=False: 3xx counts as "up" by default, we don't chase it.
-        # stream=True: headers first; the body is read only when we must search it for text.
+        # stream=True: headers first; the body is read only for the types that look into it.
         with (
             guarded_session() as session,
             session.request(
@@ -139,15 +160,17 @@ def perform_http_check(url, *, method="GET", headers=None, body="", expected_sta
             ) as response,
         ):
             elapsed = round((time.monotonic() - started) * 1000)
-            body_text = _read_body(response, started + timeout) if expected_text and method != "HEAD" else ""
-            is_up, error = evaluate(response.status_code, expected_status, expected_text, body_text)
-            return response.status_code, elapsed, is_up, error
+            text, truncated = "", False
+            if strategy.needs_body and method != "HEAD":
+                text, truncated = _read_body(response, started + timeout)
+            result = strategy.evaluate_http(config, check_types.HttpResponse(response.status_code, text, truncated))
+            return CheckOutcome(response.status_code, elapsed, result.is_up, result.message, result.details)
     except requests.Timeout:
-        return None, None, False, f"Timeout after {timeout}s"
+        return _failed(f"Timeout after {timeout}s", type=check_type)
     except requests.RequestException as exc:
         if "non-public address" in str(exc):  # raised by the connection-level SSRF guard
-            return None, None, False, "Заблоковано: адреса веде у приватну/внутрішню мережу"
-        return None, None, False, f"{type(exc).__name__}: {exc}"[:500]
+            return _failed("Заблоковано: адреса веде у приватну/внутрішню мережу", type=check_type)
+        return _failed(f"{type(exc).__name__}: {exc}"[:500], type=check_type)
 
 
 FLAP_WINDOW = timedelta(minutes=15)
@@ -310,23 +333,23 @@ def check_monitor(monitor_id, force=False, region=None):
 
     cfg = (
         Monitor.objects.filter(pk=monitor_id)
-        .values("url", "http_method", "request_headers", "request_body", "expected_status", "expected_text")
+        .values("url", "http_method", "request_headers", "request_body", "check_type", "check_config")
         .first()
     )
     if cfg is None:
         return "skipped"
-    status_code, elapsed, is_up, error = perform_http_check(
+    outcome = perform_http_check(
         cfg["url"],
         method=cfg["http_method"],
         headers=cfg["request_headers"],
         body=cfg["request_body"],
-        expected_status=cfg["expected_status"],
-        expected_text=cfg["expected_text"],
+        check_type=cfg["check_type"],
+        check_config=cfg["check_config"],
     )
-    return record_check(monitor_id, region, started_at, status_code, elapsed, is_up, error)
+    return record_check(monitor_id, region, started_at, outcome)
 
 
-def record_check(monitor_id, region, checked_at, status_code, elapsed, is_up, error):
+def record_check(monitor_id, region, checked_at, outcome):
     """Write one region's result and let the quorum decide about the incident.
 
     The monitor row lock serialises everything that can change incident state, so regions reporting at the
@@ -341,17 +364,20 @@ def record_check(monitor_id, region, checked_at, status_code, elapsed, is_up, er
             monitor=monitor,
             region=region,
             checked_at=checked_at,
-            status_code=status_code,
-            response_time_ms=elapsed,
-            is_up=is_up,
-            error=error,
+            status_code=outcome.status_code,
+            response_time_ms=outcome.response_time_ms,
+            is_up=outcome.is_up,
+            error=outcome.error,
+            details=outcome.details,
             in_maintenance=in_window,
         )
         _maybe_stabilise(monitor, checked_at)
         verdict = regions.decide(monitor, result)
         if verdict is not None:
-            set_incident_state(monitor, verdict, checked_at, error if not verdict else None, in_maintenance=in_window)
-    return "up" if is_up else "down"
+            set_incident_state(
+                monitor, verdict, checked_at, outcome.error if not verdict else None, in_maintenance=in_window
+            )
+    return "up" if outcome.is_up else "down"
 
 
 def claim_batch(monitor_ids, region, force=False):
@@ -400,11 +426,11 @@ def check_batch(monitor_ids, region=None, force=False):
             method=c["http_method"],
             headers=c["request_headers"],
             body=c["request_body"],
-            expected_status=c["expected_status"],
-            expected_text=c["expected_text"],
+            check_type=c["check_type"],
+            check_config=c["check_config"],
         )
         for c in Monitor.objects.filter(pk__in=claimed).values(
-            "pk", "url", "http_method", "request_headers", "request_body", "expected_status", "expected_text"
+            "pk", "url", "http_method", "request_headers", "request_body", "check_type", "check_config"
         )
     ]
     rows = asyncio.run(
@@ -443,6 +469,7 @@ def record_batch(rows, region):
                     response_time_ms=r.response_time_ms,
                     is_up=r.is_up,
                     error=r.error,
+                    details=r.details,
                     in_maintenance=monitors[r.monitor_id].in_window,
                 )
                 for r in kept
