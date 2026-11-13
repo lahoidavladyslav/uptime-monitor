@@ -6,6 +6,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.db import models
 from django.db.models import Func, Q, Value
+from django.db.models.functions import Lower
 from django.utils import timezone
 
 from accounts.fields import EncryptedTextField
@@ -261,22 +262,24 @@ class CheckRollupHourly(models.Model):
         indexes = [models.Index(fields=["hour"], name="hourly_hour_idx")]
 
 
-class Subscriber(models.Model):
+class StatusSubscriber(models.Model):
     """An email address that wants incident mails for one public status page or one public monitor.
 
-    Double opt-in: a row exists from the moment someone types the address, but it only receives mail
-    once `confirmed_at` is set by clicking the emailed link. Unconfirmed rows are purged after the link
-    expires. `unsub_token` is a permanent capability for the one-click unsubscribe link in every mail.
+    Double opt-in: a row exists from the moment someone types the address, but it only receives mail once
+    `confirmed_at` is set by clicking the emailed link (valid 48 h). Unsubscribing is SOFT: `unsubscribed_at` is
+    stamped and the row stays (counts, proof of the opt-out, no re-mailing). Subscribing again resets the row to
+    "pending": the old consent is not reused. `unsub_token` is the capability behind the one-click link in mails.
     """
 
     status_page = models.ForeignKey(
         StatusPage, null=True, blank=True, on_delete=models.CASCADE, related_name="subscribers"
     )
     monitor = models.ForeignKey(Monitor, null=True, blank=True, on_delete=models.CASCADE, related_name="subscribers")
-    email = models.EmailField(max_length=254)  # stored lower-case
+    email = models.EmailField(max_length=254)  # stored lower-case; uniqueness ignores case anyway (constraints)
     unsub_token = models.CharField(max_length=64, unique=True, default=_new_token)
     confirmed_at = models.DateTimeField(null=True, blank=True)
     confirmation_sent_at = models.DateTimeField(null=True, blank=True)
+    unsubscribed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -287,18 +290,24 @@ class Subscriber(models.Model):
                 name="subscriber_exactly_one_target",
             ),
             models.UniqueConstraint(
-                fields=["status_page", "email"],
+                "status_page",
+                Lower("email"),
                 condition=Q(status_page__isnull=False),
                 name="uniq_subscriber_page_email",
             ),
             models.UniqueConstraint(
-                fields=["monitor", "email"], condition=Q(monitor__isnull=False), name="uniq_subscriber_monitor_email"
+                "monitor", Lower("email"), condition=Q(monitor__isnull=False), name="uniq_subscriber_monitor_email"
             ),
         ]
 
     @property
     def is_confirmed(self):
         return self.confirmed_at is not None
+
+    @property
+    def is_active(self):
+        """Receives incident mail: confirmed and not unsubscribed."""
+        return self.confirmed_at is not None and self.unsubscribed_at is None
 
 
 def _new_webhook_secret():

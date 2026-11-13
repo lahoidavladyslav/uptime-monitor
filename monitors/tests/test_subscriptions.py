@@ -8,7 +8,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from monitors import subscriptions
-from monitors.models import Incident, Monitor, StatusPage, Subscriber
+from monitors.models import Incident, Monitor, StatusPage, StatusSubscriber
 from monitors.tasks import check_monitor, notify_subscribers
 
 SECRET_ERR = "SECRET-ERROR-TEXT"
@@ -38,21 +38,21 @@ def link(pattern):
 
 def confirmed(target, email="fan@example.com"):
     key = "status_page" if isinstance(target, StatusPage) else "monitor"
-    return Subscriber.objects.create(**{key: target}, email=email, confirmed_at=timezone.now())
+    return StatusSubscriber.objects.create(**{key: target}, email=email, confirmed_at=timezone.now())
 
 
 # ---------------- model ----------------
 def test_a_subscriber_targets_exactly_one_thing(page, monitor):
     with pytest.raises(IntegrityError), transaction.atomic():
-        Subscriber.objects.create(email="a@example.com")
+        StatusSubscriber.objects.create(email="a@example.com")
     with pytest.raises(IntegrityError), transaction.atomic():
-        Subscriber.objects.create(email="a@example.com", status_page=page, monitor=monitor)
+        StatusSubscriber.objects.create(email="a@example.com", status_page=page, monitor=monitor)
 
 
 def test_same_email_cannot_subscribe_twice_to_one_target(page):
-    Subscriber.objects.create(status_page=page, email="a@example.com")
+    StatusSubscriber.objects.create(status_page=page, email="a@example.com")
     with pytest.raises(IntegrityError), transaction.atomic():
-        Subscriber.objects.create(status_page=page, email="a@example.com")
+        StatusSubscriber.objects.create(status_page=page, email="a@example.com")
 
 
 # ---------------- subscribing ----------------
@@ -67,7 +67,7 @@ def test_subscribe_form_is_public_and_not_cached_with_a_csrf_token(client, page)
 def test_subscribe_sends_a_confirmation_mail_and_stores_nothing_confirmed(client, page):
     r = client.post(subscribe_url(page), {"email": "Fan@Example.com "})
     assert r.status_code == 200 and "Перевірте пошту" in r.content.decode()
-    sub = Subscriber.objects.get()
+    sub = StatusSubscriber.objects.get()
     assert sub.email == "fan@example.com" and sub.confirmed_at is None
     assert len(mail.outbox) == 1 and mail.outbox[0].to == ["fan@example.com"]
     assert "/subscribe/confirm/" in mail.outbox[0].body
@@ -75,7 +75,7 @@ def test_subscribe_sends_a_confirmation_mail_and_stores_nothing_confirmed(client
 
 def test_invalid_email_is_rejected_without_a_row(client, page):
     r = client.post(subscribe_url(page), {"email": "not-an-email"})
-    assert r.status_code == 200 and not Subscriber.objects.exists() and not mail.outbox
+    assert r.status_code == 200 and not StatusSubscriber.objects.exists() and not mail.outbox
 
 
 def test_answer_is_identical_for_new_pending_and_confirmed_addresses(client, page):
@@ -91,7 +91,7 @@ def test_confirmation_is_not_resent_within_the_cooldown(client, page):
     client.post(subscribe_url(page), {"email": "fan@example.com"})
     client.post(subscribe_url(page), {"email": "fan@example.com"})
     assert len(mail.outbox) == 1
-    Subscriber.objects.update(confirmation_sent_at=timezone.now() - timedelta(minutes=11))
+    StatusSubscriber.objects.update(confirmation_sent_at=timezone.now() - timedelta(minutes=11))
     client.post(subscribe_url(page), {"email": "fan@example.com"})
     assert len(mail.outbox) == 2
 
@@ -111,7 +111,7 @@ def test_subscriber_cap_per_target_stops_database_flooding(client, page, setting
     settings.MAX_SUBSCRIBERS_PER_TARGET = 2
     for i in range(4):
         client.post(subscribe_url(page), {"email": f"u{i}@example.com"})
-    assert Subscriber.objects.count() == 2
+    assert StatusSubscriber.objects.count() == 2
 
 
 @pytest.mark.parametrize("make_private", ["page", "monitor"])
@@ -124,12 +124,12 @@ def test_private_targets_cannot_be_subscribed_to(client, page, pub_monitor, make
         url = reverse("monitor_subscribe", args=[pub_monitor.public_slug])
     assert client.get(url).status_code == 404
     assert client.post(url, {"email": "a@example.com"}).status_code == 404
-    assert not Subscriber.objects.exists()
+    assert not StatusSubscriber.objects.exists()
 
 
 def test_single_monitor_page_can_be_subscribed_to(client, pub_monitor):
     client.post(reverse("monitor_subscribe", args=[pub_monitor.public_slug]), {"email": "a@example.com"})
-    assert Subscriber.objects.get().monitor == pub_monitor
+    assert StatusSubscriber.objects.get().monitor == pub_monitor
 
 
 # ---------------- confirming ----------------
@@ -137,16 +137,16 @@ def test_confirm_link_activates_the_subscription(client, page):
     client.post(subscribe_url(page), {"email": "fan@example.com"})
     r = client.get(link(r"http://\S+/subscribe/confirm/\S+/"))
     assert r.status_code == 200 and "підписку підтверджено" in r.content.decode().lower()
-    assert Subscriber.objects.get().confirmed_at is not None
+    assert StatusSubscriber.objects.get().confirmed_at is not None
 
 
 def test_confirm_is_idempotent(client, page):
     client.post(subscribe_url(page), {"email": "fan@example.com"})
     url = link(r"/subscribe/confirm/\S+/")
     client.get(url)
-    first = Subscriber.objects.get().confirmed_at
+    first = StatusSubscriber.objects.get().confirmed_at
     assert client.get(url).status_code == 200
-    assert Subscriber.objects.get().confirmed_at == first
+    assert StatusSubscriber.objects.get().confirmed_at == first
 
 
 @pytest.mark.parametrize("token", ["garbage", "a:b:c"])
@@ -157,17 +157,17 @@ def test_bad_confirm_token_is_a_400(client, db, token):
 def test_expired_confirm_token_is_a_400_and_does_not_confirm(client, page):
     from unittest import mock
 
-    sub = Subscriber.objects.create(status_page=page, email="fan@example.com")
+    sub = StatusSubscriber.objects.create(status_page=page, email="fan@example.com")
     token = subscriptions.confirm_token_for(sub)
     in_four_days = timezone.now().timestamp() + 4 * 24 * 3600
     with mock.patch("django.core.signing.time.time", return_value=in_four_days):
         assert client.get(reverse("subscription_confirm", args=[token])).status_code == 400
-    assert Subscriber.objects.get().confirmed_at is None
+    assert StatusSubscriber.objects.get().confirmed_at is None
     assert client.get(reverse("subscription_confirm", args=[token])).status_code == 200  # still fine when fresh
 
 
 def test_confirm_token_for_a_deleted_subscriber_is_a_400(client, page):
-    sub = Subscriber.objects.create(status_page=page, email="fan@example.com")
+    sub = StatusSubscriber.objects.create(status_page=page, email="fan@example.com")
     token = subscriptions.confirm_token_for(sub)
     sub.delete()
     assert client.get(reverse("subscription_confirm", args=[token])).status_code == 400
@@ -176,28 +176,28 @@ def test_confirm_token_for_a_deleted_subscriber_is_a_400(client, page):
 def test_unconfirmed_subscribers_are_purged_after_the_token_expires(page):
     from monitors.tasks import cleanup_unconfirmed_subscribers
 
-    old = Subscriber.objects.create(status_page=page, email="old@example.com")
-    Subscriber.objects.filter(pk=old.pk).update(created_at=timezone.now() - timedelta(days=4))
-    keep_new = Subscriber.objects.create(status_page=page, email="new@example.com")
+    old = StatusSubscriber.objects.create(status_page=page, email="old@example.com")
+    StatusSubscriber.objects.filter(pk=old.pk).update(created_at=timezone.now() - timedelta(days=4))
+    keep_new = StatusSubscriber.objects.create(status_page=page, email="new@example.com")
     keep_confirmed = confirmed(page, "ok@example.com")
-    Subscriber.objects.filter(pk=keep_confirmed.pk).update(created_at=timezone.now() - timedelta(days=40))
+    StatusSubscriber.objects.filter(pk=keep_confirmed.pk).update(created_at=timezone.now() - timedelta(days=40))
     assert cleanup_unconfirmed_subscribers() == 1
-    assert set(Subscriber.objects.values_list("pk", flat=True)) == {keep_new.pk, keep_confirmed.pk}
+    assert set(StatusSubscriber.objects.values_list("pk", flat=True)) == {keep_new.pk, keep_confirmed.pk}
 
 
 # ---------------- unsubscribing ----------------
 def test_unsubscribe_get_does_not_unsubscribe_mail_scanners_prefetch_links(client, page):
     sub = confirmed(page)
     r = client.get(reverse("unsubscribe", args=[sub.unsub_token]))
-    assert r.status_code == 200 and Subscriber.objects.filter(pk=sub.pk).exists()
+    assert r.status_code == 200 and StatusSubscriber.objects.filter(pk=sub.pk).exists()
     assert "<form" in r.content.decode()
 
 
-def test_unsubscribe_post_removes_the_subscriber(client, page):
+def test_unsubscribe_post_stamps_the_subscriber_instead_of_deleting_it(client, page):
     sub = confirmed(page)
     r = client.post(reverse("unsubscribe", args=[sub.unsub_token]))
     assert r.status_code == 200 and "відписані" in r.content.decode().lower()
-    assert not Subscriber.objects.filter(pk=sub.pk).exists()
+    assert StatusSubscriber.objects.get(pk=sub.pk).unsubscribed_at is not None
 
 
 def test_one_click_unsubscribe_works_without_a_csrf_token(page):
@@ -206,7 +206,7 @@ def test_one_click_unsubscribe_works_without_a_csrf_token(page):
     strict = Client(enforce_csrf_checks=True)
     sub = confirmed(page)
     r = strict.post(reverse("unsubscribe", args=[sub.unsub_token]), {"List-Unsubscribe": "One-Click"})
-    assert r.status_code == 200 and not Subscriber.objects.exists()
+    assert r.status_code == 200 and StatusSubscriber.objects.get().unsubscribed_at is not None
 
 
 def test_unknown_unsubscribe_token_answers_like_a_known_one(client, page):
@@ -228,7 +228,7 @@ def test_incident_open_and_resolve_mail_confirmed_subscribers(page, django_captu
 
     m = page.monitors.get()
     confirmed(page, "fan@example.com")
-    Subscriber.objects.create(status_page=page, email="pending@example.com")  # not confirmed: no mail
+    StatusSubscriber.objects.create(status_page=page, email="pending@example.com")  # not confirmed: no mail
     with responses.RequestsMock() as rsps:
         rsps.add(responses.GET, m.url, status=503)
         with django_capture_on_commit_callbacks(execute=True):
@@ -320,7 +320,7 @@ def test_subscription_lifecycle_is_logged_by_id_never_by_address(client, page, c
     caplog.set_level(logging.INFO, logger="subscriptions")
     client.post(subscribe_url(page), {"email": "fan@example.com"})
     client.get(link(r"/subscribe/confirm/\S+/"))
-    sub = Subscriber.objects.get()
+    sub = StatusSubscriber.objects.get()
     client.post(reverse("unsubscribe", args=[sub.unsub_token]))
     events = [(r.event, r.subscriber_id) for r in caplog.records if r.name == "subscriptions"]
     assert events == [

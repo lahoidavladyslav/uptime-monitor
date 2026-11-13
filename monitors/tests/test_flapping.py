@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from django.core import mail
 
-from monitors.models import Incident, Monitor, OutboxEvent, Subscriber, WebhookEndpoint
+from monitors.models import Incident, Monitor, OutboxEvent, StatusSubscriber, WebhookEndpoint
 from monitors.tasks import record_check
 from monitors.tests.helpers import outcome
 
@@ -60,7 +60,7 @@ def test_the_fifth_change_sends_one_unstable_notice_instead_of_an_alert(mon, run
 
 
 def test_further_changes_are_muted_but_still_recorded(mon, run, user):
-    Subscriber.objects.create(
+    StatusSubscriber.objects.create(
         monitor=Monitor.objects.filter(pk=mon.pk).first(), email="fan@example.com", confirmed_at=T0
     )
     Monitor.objects.filter(pk=mon.pk).update(is_public=True)

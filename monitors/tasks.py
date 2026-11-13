@@ -11,6 +11,7 @@ from django.conf import settings
 from django.core.mail import EmailMessage, send_mail
 from django.db import IntegrityError, connection, transaction
 from django.db.models import DateTimeField, DurationField, ExpressionWrapper, F, Q, Value
+from django.db.models.functions import Coalesce
 from django.urls import reverse
 from django.utils import timezone
 
@@ -23,7 +24,7 @@ from .models import (
     Monitor,
     MonitorRegion,
     OutboxEvent,
-    Subscriber,
+    StatusSubscriber,
 )
 from .security import blocked_reason
 
@@ -564,9 +565,9 @@ def notify_subscribers(incident_id, kind):
 @shared_task(**_RETRY)
 def send_subscriber_email(subscriber_id, incident_id, kind):
     """Public-safe content only: the public name, never the monitored URL or the error text."""
-    sub = Subscriber.objects.select_related("status_page", "monitor").filter(pk=subscriber_id).first()
+    sub = StatusSubscriber.objects.select_related("status_page", "monitor").filter(pk=subscriber_id).first()
     incident = Incident.objects.select_related("monitor").filter(pk=incident_id).first()
-    if sub is None or incident is None or not sub.is_confirmed:
+    if sub is None or incident is None or not sub.is_active:
         return "gone"
     name = incident.monitor.public_name
     if kind == "opened":
@@ -595,14 +596,14 @@ def send_subscriber_email(subscriber_id, incident_id, kind):
 
 @shared_task(**_RETRY)
 def send_subscription_confirmation(subscriber_id):
-    sub = Subscriber.objects.select_related("status_page", "monitor").filter(pk=subscriber_id).first()
-    if sub is None or sub.is_confirmed:
+    sub = StatusSubscriber.objects.select_related("status_page", "monitor").filter(pk=subscriber_id).first()
+    if sub is None or sub.is_confirmed or sub.unsubscribed_at is not None:
         return "skipped"
     title = sub.status_page.title if sub.status_page_id else sub.monitor.public_name
     send_mail(
         f"Підтвердіть підписку: {title}",
         f"Ви (або хтось інший) попросили надсилати сповіщення про збої «{title}» на цю адресу.\n\n"
-        f"Підтвердити підписку (діє 3 дні): {subscriptions.confirm_url(sub)}\n\n"
+        f"Підтвердити підписку (діє 48 годин): {subscriptions.confirm_url(sub)}\n\n"
         "Якщо це були не ви — просто проігноруйте цей лист, нічого не буде надіслано.",
         settings.DEFAULT_FROM_EMAIL,
         [sub.email],
@@ -612,9 +613,15 @@ def send_subscription_confirmation(subscriber_id):
 
 @shared_task
 def cleanup_unconfirmed_subscribers():
-    """Pending rows whose confirmation link has expired (they can never be confirmed any more)."""
+    """Pending rows whose confirmation link has expired (it can never be used any more). Age counts from the LAST
+    confirmation mail, so someone who re-subscribed an old row is not purged the moment they ask."""
     cutoff = timezone.now() - timedelta(seconds=subscriptions.CONFIRM_MAX_AGE)
-    deleted, _ = Subscriber.objects.filter(confirmed_at__isnull=True, created_at__lt=cutoff).delete()
+    deleted, _ = (
+        StatusSubscriber.objects.filter(confirmed_at__isnull=True, unsubscribed_at__isnull=True)
+        .annotate(last_mail=Coalesce("confirmation_sent_at", "created_at"))
+        .filter(last_mail__lt=cutoff)
+        .delete()
+    )
     return deleted
 
 
