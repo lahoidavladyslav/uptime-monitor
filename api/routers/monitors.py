@@ -137,8 +137,10 @@ class MonitorIn(Schema):
     http_method: Literal["GET", "HEAD", "POST"] = "GET"
     request_headers: str = ""  # one "Name: value" per line, like the form's textarea
     request_body: str = ""
-    expected_status: str = ""  # e.g. 200,204,300-399; empty = 2xx/3xx
-    expected_text: str = ""
+    # what is checked: http_status | keyword | json_path | ssl_expiry; the config is validated per type
+    # (see monitors/check_types.py), e.g. {"keyword": "Welcome", "must_contain": true}
+    check_type: str = "http_status"
+    check_config: dict = {}
 
 
 class MonitorConfigOut(MonitorIn):

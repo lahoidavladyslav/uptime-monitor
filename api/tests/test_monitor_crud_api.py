@@ -16,8 +16,8 @@ VALID = {
     "http_method": "GET",
     "request_headers": "",
     "request_body": "",
-    "expected_status": "",
-    "expected_text": "",
+    "check_type": "http_status",
+    "check_config": {},
 }
 
 
@@ -73,9 +73,12 @@ def test_create_requires_login_and_csrf(client, db, user):
         ({"url": "https://example.com"}, "url"),  # duplicate of the fixture monitor
         ({"name": ""}, "name"),
         ({"interval_seconds": 7}, "interval_seconds"),
-        ({"expected_status": "abc"}, "expected_status"),
+        ({"check_type": "keyword", "check_config": {}}, "check_config"),
+        ({"check_config": {"expected_statuses": ["abc"]}}, "check_config"),
+        ({"check_type": "telnet"}, "check_type"),
+        ({"check_type": "ssl_expiry", "url": "http://plain.example.org"}, "url"),
         ({"request_headers": "Host: x"}, "request_headers"),
-        ({"http_method": "HEAD", "expected_text": "hello"}, "expected_text"),
+        ({"http_method": "HEAD", "check_type": "keyword", "check_config": {"keyword": "hello"}}, "check_type"),
         ({"http_method": "GET", "request_body": "x"}, "request_body"),
     ],
 )
@@ -161,3 +164,24 @@ def test_delete_foreign_is_404_and_anonymous_is_401(auth_client, client, foreign
 def test_a_new_monitor_shows_up_on_the_dashboard(auth_client):
     post(auth_client, VALID)
     assert [m["name"] for m in auth_client.get("/api/v1/dashboard").json()["monitors"]] == ["Мій сайт"]
+
+
+@pytest.mark.parametrize(
+    "kind,config",
+    [
+        ("keyword", {"keyword": "Welcome", "must_contain": True}),
+        ("json_path", {"path": "status.db", "equals": "ok"}),
+        ("http_status", {"expected_statuses": [200, "300-399"]}),
+        ("ssl_expiry", {"min_days_left": 7}),
+    ],
+)
+def test_every_check_type_can_be_created_and_read_back(auth_client, kind, config):
+    r = post(auth_client, {**VALID, "check_type": kind, "check_config": config})
+    assert r.status_code == 201, r.content
+    back = auth_client.get(f"/api/v1/monitors/{r.json()['id']}/config").json()
+    assert (back["check_type"], back["check_config"]) == (kind, config)
+
+
+def test_the_stored_config_is_the_normalised_one(auth_client):
+    r = post(auth_client, {**VALID, "check_type": "keyword", "check_config": {"keyword": "x"}})
+    assert r.json()["check_config"] == {"keyword": "x", "must_contain": True}

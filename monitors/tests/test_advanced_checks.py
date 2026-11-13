@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError
 from django.urls import reverse
 from django.utils import timezone
 
-from monitors.checks import headers_to_lines, parse_header_lines, parse_status_spec, status_ok
+from monitors.checks import headers_to_lines, parse_header_lines
 from monitors.forms import MaintenanceForm, MonitorForm
 from monitors.models import CheckResult, Incident, MaintenanceWindow, Monitor
 from monitors.tasks import (
@@ -24,25 +24,6 @@ URL = "https://example.com"
 
 
 # ---------------- pure helpers ----------------
-@pytest.mark.parametrize(
-    "spec,code,ok",
-    [
-        ("", 200, True), ("", 301, True), ("", 404, False), ("", 500, False),
-        ("200", 200, True), ("200", 204, False),
-        ("200,204", 204, True), ("200-299,404", 404, True), ("200-299,404", 301, False),
-        ("401", 401, True),  # a protected endpoint can be "up" when it answers 401
-    ],
-)  # fmt: skip
-def test_status_spec(spec, code, ok):
-    assert status_ok(code, spec) is ok
-
-
-@pytest.mark.parametrize("bad", ["abc", "20", "200-", "600", "300-200", "99", "200;204"])
-def test_status_spec_rejects_garbage(bad):
-    with pytest.raises(ValidationError):
-        parse_status_spec(bad)
-
-
 def test_headers_parse_roundtrip_and_rules():
     parsed = parse_header_lines("Authorization: Bearer x:y\nAccept: application/json\n\n")
     assert parsed == {"Authorization": "Bearer x:y", "Accept": "application/json"}  # value may contain ':'
@@ -146,8 +127,8 @@ def test_form_accepts_valid_advanced_config(user):
         http_method="POST",
         request_body="x",
         request_headers="X-A: 1",
-        expected_status="200,204",
-        expected_text="ok",
+        check_type="keyword",
+        check_config={"keyword": "ok", "expected_statuses": [200, 204]},
     )
     assert f.is_valid(), f.errors
     m = f.save(commit=False)
@@ -157,9 +138,11 @@ def test_form_accepts_valid_advanced_config(user):
 @pytest.mark.parametrize(
     "over,field",
     [
-        ({"expected_status": "abc"}, "expected_status"),
+        ({"check_type": "keyword", "check_config": {}}, "check_config"),
+        ({"check_type": "keyword", "check_config": {"keyword": "x", "oops": 1}}, "check_config"),
+        ({"check_type": "ssl_expiry", "url": "http://a.com"}, "url"),
         ({"request_headers": "Host: x"}, "request_headers"),
-        ({"http_method": "HEAD", "expected_text": "x"}, "expected_text"),
+        ({"http_method": "HEAD", "check_type": "keyword", "check_config": {"keyword": "x"}}, "check_type"),
         ({"http_method": "GET", "request_body": "x"}, "request_body"),
         ({"http_method": "DELETE"}, "http_method"),
     ],

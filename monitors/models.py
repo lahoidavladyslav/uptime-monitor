@@ -41,12 +41,6 @@ class Monitor(models.Model):
     http_method = models.CharField("Метод", max_length=4, choices=METHOD_CHOICES, default="GET")
     request_headers = models.JSONField("Заголовки", default=dict, blank=True)
     request_body = models.TextField("Тіло запиту", blank=True, default="", max_length=10_000)
-    expected_status = models.CharField(
-        "Очікувані коди", max_length=100, blank=True, default="", help_text="Напр. 200,204,300-399. Порожньо = 2xx/3xx."
-    )
-    expected_text = models.CharField(
-        "Очікуваний текст", max_length=200, blank=True, default="", help_text="Має бути у тілі відповіді."
-    )
 
     # --- public page branding ---
     public_title = models.CharField("Назва на публічній сторінці", max_length=100, blank=True, default="")

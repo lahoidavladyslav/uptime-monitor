@@ -345,14 +345,15 @@
       },
       "MonitorConfigOut": {
         "properties": {
-          "expected_status": {
-            "default": "",
-            "title": "Expected Status",
-            "type": "string"
+          "check_config": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Check Config",
+            "type": "object"
           },
-          "expected_text": {
-            "default": "",
-            "title": "Expected Text",
+          "check_type": {
+            "default": "http_status",
+            "title": "Check Type",
             "type": "string"
           },
           "http_method": {
@@ -530,14 +531,15 @@
       "MonitorIn": {
         "description": "Everything the monitor form edits. Validation is MonitorForm's, so the API and the HTML form agree.",
         "properties": {
-          "expected_status": {
-            "default": "",
-            "title": "Expected Status",
-            "type": "string"
+          "check_config": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Check Config",
+            "type": "object"
           },
-          "expected_text": {
-            "default": "",
-            "title": "Expected Text",
+          "check_type": {
+            "default": "http_status",
+            "title": "Check Type",
             "type": "string"
           },
           "http_method": {
