@@ -112,8 +112,15 @@ def test_the_ordering_and_filtering_used_by_the_pages_still_work(mon):
 
 
 # ---------------- manage_partitions ----------------
+def drop_all_daily_partitions():
+    """The test database was migrated on the real 'today', which has nothing to do with the frozen NOW."""
+    for name in partitions.daily_partitions().values():
+        q(f"DROP TABLE {name}")
+
+
 @time_machine.travel(NOW, tick=False)
 def test_partitions_are_created_for_today_and_three_days_ahead_and_it_is_idempotent():
+    drop_all_daily_partitions()  # started failing the day after the test DB was built (it assumed "today" == NOW)
     manage_partitions()
     for i in range(4):
         assert exists(part(TODAY + timedelta(days=i)))
