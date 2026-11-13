@@ -118,3 +118,12 @@ def test_legacy_expected_status_and_text_become_a_check_type_and_config(
 ):
     migration = importlib.import_module("monitors.migrations.0012_check_types")
     assert migration.convert(status, text) == (expected_type, expected_config)
+
+
+@pytest.mark.parametrize(
+    "level,notified",
+    [(None, []), (14, [14]), (3, [14, 7]), (0, [14, 7, 1, 0])],
+)
+def test_the_old_alert_level_becomes_the_list_of_notified_thresholds(level, notified):
+    migration = importlib.import_module("monitors.migrations.0014_ssl_notified")
+    assert migration.level_to_notified(level) == notified

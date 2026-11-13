@@ -51,7 +51,8 @@ class Monitor(models.Model):
     # --- SSL certificate expiry (filled by a daily task) ---
     ssl_expires_at = models.DateTimeField(null=True, blank=True)
     ssl_error = models.CharField(max_length=200, blank=True, default="")
-    ssl_alerted_level = models.PositiveSmallIntegerField(null=True, blank=True)  # smallest threshold already mailed
+    # thresholds (days) already mailed for the CURRENT certificate; reset when it is renewed or healthy again
+    ssl_notified = models.JSONField(default=list, blank=True)
 
     # set while the monitor changes state too often (see tasks.set_incident_state): alerts are muted meanwhile
     flapping_since = models.DateTimeField(null=True, blank=True)

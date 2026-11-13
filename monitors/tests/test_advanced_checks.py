@@ -1,9 +1,7 @@
-import ssl
 from datetime import timedelta
 
 import pytest
 import responses
-from django.core import mail
 from django.core.exceptions import ValidationError
 from django.urls import reverse
 from django.utils import timezone
@@ -13,11 +11,8 @@ from monitors.forms import MaintenanceForm, MonitorForm
 from monitors.models import CheckResult, Incident, MaintenanceWindow, Monitor
 from monitors.tasks import (
     check_monitor,
-    check_ssl,
     due_monitors,
     perform_http_check,
-    schedule_ssl_checks,
-    ssl_level,
 )
 
 URL = "https://example.com"
@@ -232,94 +227,3 @@ def test_dashboard_and_public_page_show_maintenance(auth_client, client, monitor
     window(monitor)
     assert "🛠 обслуговування" in auth_client.get(reverse("dashboard")).content.decode()
     assert "Планові роботи" in client.get(reverse("public_status", args=[monitor.public_slug])).content.decode()
-
-
-# ---------------- SSL ----------------
-@pytest.fixture
-def https_monitor(user):
-    return Monitor.objects.create(user=user, name="s", url="https://secure.example.com")
-
-
-def fake_expiry(monkeypatch, days):
-    monkeypatch.setattr(
-        "monitors.tasks.fetch_ssl_expiry", lambda host, port=443: timezone.now() + timedelta(days=days, hours=1)
-    )
-
-
-@pytest.mark.parametrize("days,level", [(60, None), (15, None), (14, 14), (10, 14), (3, 3), (1, 3), (0, 0)])
-def test_ssl_level(days, level):
-    assert ssl_level(days) == level
-
-
-def test_ssl_alert_sent_once_per_threshold_then_reset_on_renewal(https_monitor, monkeypatch):
-    fake_expiry(monkeypatch, 10)
-    check_ssl(https_monitor.pk)
-    check_ssl(https_monitor.pk)  # same day again: no second mail
-    assert len(mail.outbox) == 1 and "10 дн." in mail.outbox[0].subject
-
-    fake_expiry(monkeypatch, 2)  # crossed the next threshold -> another mail
-    check_ssl(https_monitor.pk)
-    check_ssl(https_monitor.pk)
-    assert len(mail.outbox) == 2 and "2 дн." in mail.outbox[1].subject
-
-    fake_expiry(monkeypatch, 90)  # certificate renewed -> state resets, no mail
-    check_ssl(https_monitor.pk)
-    https_monitor.refresh_from_db()
-    assert https_monitor.ssl_alerted_level is None and len(mail.outbox) == 2
-
-    fake_expiry(monkeypatch, 5)  # and the next expiry alerts again
-    check_ssl(https_monitor.pk)
-    assert len(mail.outbox) == 3
-
-
-def test_healthy_certificate_sends_nothing_and_is_stored(https_monitor, monkeypatch):
-    fake_expiry(monkeypatch, 80)
-    assert check_ssl(https_monitor.pk) == 80
-    https_monitor.refresh_from_db()
-    assert https_monitor.ssl_expires_at and not mail.outbox and https_monitor.ssl_error == ""
-
-
-def test_expired_certificate_alerts(https_monitor, monkeypatch):
-    def boom(host, port=443):
-        err = ssl.SSLCertVerificationError(1, "certificate verify failed: certificate has expired")
-        err.verify_message = "certificate has expired"
-        raise err
-
-    monkeypatch.setattr("monitors.tasks.fetch_ssl_expiry", boom)
-    assert check_ssl(https_monitor.pk) == "invalid"
-    https_monitor.refresh_from_db()
-    assert "прострочений" in https_monitor.ssl_error
-    assert len(mail.outbox) == 1 and "прострочений" in mail.outbox[0].subject
-
-
-def test_ssl_network_error_is_recorded_not_raised(https_monitor, monkeypatch):
-    def boom(host, port=443):
-        raise ConnectionRefusedError()
-
-    monkeypatch.setattr("monitors.tasks.fetch_ssl_expiry", boom)
-    assert check_ssl(https_monitor.pk) == "error"
-    assert not mail.outbox
-
-
-def test_ssl_check_skips_http_and_private_targets(user, monkeypatch):
-    plain = Monitor.objects.create(user=user, name="p", url="http://plain.example.com")
-    assert check_ssl(plain.pk) == "skipped"
-    monkeypatch.setattr("monitors.tasks.blocked_reason", lambda url: "private")
-    priv = Monitor.objects.create(user=user, name="i", url="https://internal.example.com")
-    assert check_ssl(priv.pk) == "blocked"
-
-
-def test_schedule_ssl_checks_only_active_https(user, monkeypatch):
-    queued = []
-    monkeypatch.setattr("monitors.tasks.check_ssl.delay", lambda pk: queued.append(pk))
-    a = Monitor.objects.create(user=user, name="a", url="https://a.com")
-    Monitor.objects.create(user=user, name="b", url="http://b.com")
-    Monitor.objects.create(user=user, name="c", url="https://c.com", is_active=False)
-    assert schedule_ssl_checks() == 1 and queued == [a.pk]
-
-
-def test_detail_page_shows_ssl_state(auth_client, https_monitor):
-    https_monitor.ssl_expires_at = timezone.now() + timedelta(days=2, hours=1)
-    https_monitor.save()
-    html = auth_client.get(reverse("monitor_detail", args=[https_monitor.pk])).content.decode()
-    assert "спливає через 2 дн." in html

@@ -49,6 +49,7 @@ def due_monitors(now=None):
     one_second = Value(timedelta(seconds=1), output_field=DurationField())
     return (
         Monitor.objects.filter(is_active=True)
+        .exclude(check_type="ssl_expiry")  # checked once a day by check_ssl, not every interval
         .annotate(
             due_at=ExpressionWrapper(
                 F("last_checked_at") + F("interval_seconds") * one_second,
@@ -61,6 +62,9 @@ def due_monitors(now=None):
 
 def enqueue_checks(monitor_id, force=False):
     """One task per region, each on that region's own queue (`checks.<region>`)."""
+    kind = Monitor.objects.filter(pk=monitor_id).values_list("check_type", flat=True).first()
+    if kind is not None and not check_types.get(kind).needs_http:
+        return  # ssl_expiry: "check now" is check_ssl (the callers enqueue it), there is nothing to request here
     for region in settings.CHECK_REGIONS:
         check_monitor.apply_async(
             args=[monitor_id], kwargs={"force": force, "region": region}, queue=f"checks.{region}"
@@ -622,7 +626,7 @@ def manage_partitions():
 
 
 # ----------------------------- SSL certificate expiry -----------------------------
-SSL_THRESHOLDS = (14, 3, 0)  # alert once when each is crossed
+SSL_THRESHOLDS = (14, 7, 1, 0)  # days; announced once each per certificate (0 = expired)
 
 
 def fetch_ssl_expiry(host, port=443):
@@ -641,14 +645,9 @@ def fetch_ssl_expiry(host, port=443):
     return datetime.fromtimestamp(ssl.cert_time_to_seconds(not_after), tz=UTC)
 
 
-def ssl_level(days_left):
-    """Which alert threshold is currently crossed (smallest one), or None."""
-    crossed = [t for t in SSL_THRESHOLDS if days_left <= t]
-    return min(crossed) if crossed else None
-
-
 @shared_task
 def schedule_ssl_checks():
+    """Once a day (beat, 04:00): every active https monitor, including the ones of type ssl_expiry."""
     ids = list(Monitor.objects.filter(is_active=True, url__istartswith="https://").values_list("pk", flat=True))
     for monitor_id in ids:
         check_ssl.delay(monitor_id)
@@ -657,6 +656,8 @@ def schedule_ssl_checks():
 
 @shared_task
 def check_ssl(monitor_id):
+    """Read the certificate, keep ssl_expires_at/ssl_error current, announce crossed thresholds, and, for monitors
+    of type ssl_expiry, record the verdict as a CheckResult (so incidents/uptime work like for any other check)."""
     import ssl
     from urllib.parse import urlsplit
 
@@ -671,38 +672,55 @@ def check_ssl(monitor_id):
         expires = fetch_ssl_expiry(parts.hostname, parts.port or 443)
     except ssl.SSLCertVerificationError as exc:
         expired = "expired" in str(exc).lower()
-        Monitor.objects.filter(pk=monitor.pk).update(
-            ssl_error="Сертифікат прострочений" if expired else f"Помилка сертифіката: {exc.verify_message}"[:200],
-            ssl_expires_at=now if expired else None,
-        )
+        message = "Сертифікат прострочений" if expired else f"Помилка сертифіката: {exc.verify_message}"[:200]
+        Monitor.objects.filter(pk=monitor.pk).update(ssl_error=message, ssl_expires_at=now if expired else None)
         if expired:
-            _maybe_alert(monitor, 0)
+            _apply_ssl_thresholds(monitor, now, 0)
+        reason = "certificate has expired" if expired else f"certificate is invalid: {exc.verify_message}"
+        _record_ssl_result(monitor, now, False, reason, {"type": "ssl_expiry", "days_left": 0})
         return "invalid"
     except (OSError, ssl.SSLError) as exc:
+        # not a verdict about the certificate (the network may be down): no result, no incident
         Monitor.objects.filter(pk=monitor.pk).update(ssl_error=f"{type(exc).__name__}"[:200])
         return "error"
 
     days_left = (expires - now).days if expires > now else 0
+    previous_expiry = monitor.ssl_expires_at
     Monitor.objects.filter(pk=monitor.pk).update(ssl_expires_at=expires, ssl_error="")
-    _maybe_alert(monitor, ssl_level(days_left), days_left)
+    renewed = previous_expiry is not None and expires > previous_expiry + timedelta(days=1)
+    _apply_ssl_thresholds(monitor, expires, days_left, renewed=renewed)
+    if monitor.check_type == "ssl_expiry":
+        verdict = check_types.get("ssl_expiry").evaluate_ssl(monitor.check_config, days_left)
+        _record_ssl_result(monitor, now, verdict.is_up, verdict.message, verdict.details)
     return days_left
 
 
-def _maybe_alert(monitor, level, days_left=0):
-    """One mail per threshold: 14d -> 3d -> expired. Renewal resets the state."""
-    if level is None:
-        if monitor.ssl_alerted_level is not None:
-            Monitor.objects.filter(pk=monitor.pk).update(ssl_alerted_level=None)
+def _record_ssl_result(monitor, at, is_up, message, details):
+    if monitor.check_type != "ssl_expiry":
         return
-    if monitor.ssl_alerted_level is None or level < monitor.ssl_alerted_level:
-        # conditional update = atomic claim, so two workers can't both send
-        claimed = (
-            Monitor.objects.filter(pk=monitor.pk)
-            .filter(Q(ssl_alerted_level__isnull=True) | Q(ssl_alerted_level__gt=level))
-            .update(ssl_alerted_level=level)
-        )
-        if claimed:
-            send_ssl_alert.delay(monitor.pk, days_left)
+    Monitor.objects.filter(pk=monitor.pk).update(last_checked_at=at)
+    record_check(
+        monitor.pk,
+        regions.default_region(),
+        at,
+        CheckOutcome(
+            None, None, is_up, None if is_up else message, details if is_up else {**details, "message": message}
+        ),
+    )
+
+
+def _apply_ssl_thresholds(monitor, expires, days_left, renewed=False):
+    """Mail once per threshold per certificate. `monitor` is the row as the caller read it: the state change is a
+    conditional UPDATE on exactly that value, so of two workers that read the same row only one wins and sends."""
+    seen = [] if renewed else list(monitor.ssl_notified)
+    crossed = [t for t in SSL_THRESHOLDS if days_left <= t]
+    new_state = sorted(set(seen) | set(crossed), reverse=True) if crossed else []  # healthy again: forget everything
+    if new_state == list(monitor.ssl_notified):
+        return
+    won = Monitor.objects.filter(pk=monitor.pk, ssl_notified=monitor.ssl_notified).update(ssl_notified=new_state)
+    # the state only changes when a threshold is newly crossed (or everything is forgotten, when `crossed` is empty)
+    if won and crossed:
+        send_ssl_alert.delay(monitor.pk, days_left)
 
 
 @shared_task(
