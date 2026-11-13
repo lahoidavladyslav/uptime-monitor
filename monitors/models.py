@@ -310,6 +310,28 @@ class StatusSubscriber(models.Model):
         return self.confirmed_at is not None and self.unsubscribed_at is None
 
 
+class SubscriberNotification(models.Model):
+    """The idempotency key of one mail: (incident, subscriber, event) exists at most once, however many times a task
+    is delivered, retried or re-run. `claimed_at` is a lease (a worker is sending it, or died trying); `sent_at` is
+    the proof that it went out."""
+
+    incident = models.ForeignKey(Incident, on_delete=models.CASCADE, related_name="subscriber_notifications")
+    subscriber = models.ForeignKey(StatusSubscriber, on_delete=models.CASCADE, related_name="notifications")
+    event = models.CharField(max_length=20)  # opened | resolved
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["incident", "subscriber", "event"], name="uniq_notification_per_event")
+        ]
+        indexes = [
+            # the resume job looks for "claimed but never finished"
+            models.Index(fields=["claimed_at"], condition=Q(sent_at__isnull=True), name="notif_unfinished_idx"),
+        ]
+
+
 def _new_webhook_secret():
     return secrets.token_urlsafe(32)
 

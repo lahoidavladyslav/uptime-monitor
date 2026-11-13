@@ -25,6 +25,7 @@ from .models import (
     MonitorRegion,
     OutboxEvent,
     StatusSubscriber,
+    SubscriberNotification,
 )
 from .security import blocked_reason
 
@@ -546,36 +547,39 @@ _RETRY = dict(
 )
 
 
+NOTIFICATION_BATCH = 100
+NOTIFICATION_LEASE = timedelta(minutes=5)  # a claimed-but-unsent mail older than this belongs to a dead worker
+
+
 @shared_task
-def notify_subscribers(incident_id, kind):
-    """Fan out one task per recipient, so a failing address can't hold up or duplicate the others."""
+def notify_subscribers(incident_id, event):
+    """Split the recipients into batches of 100, one task per batch (not 10 000 mails in one task)."""
     incident = Incident.objects.select_related("monitor").filter(pk=incident_id).first()
     if incident is None:
         return "gone"
+    ids = [sub.pk for sub in subscriptions.recipients_for(incident)]
     queued = 0
-    for sub in subscriptions.recipients_for(incident):
+    for chunk in _chunks(ids, NOTIFICATION_BATCH):
         try:
-            send_subscriber_email.delay(sub.pk, incident_id, kind)
+            send_notification_batch.delay(incident_id, event, chunk)
             queued += 1
         except Exception:
-            logger.exception("could not queue subscriber mail", extra={"subscriber_id": sub.pk})
+            logger.exception("could not queue a notification batch", extra={"incident_id": incident_id})
     return queued
 
 
-@shared_task(**_RETRY)
-def send_subscriber_email(subscriber_id, incident_id, kind):
+def _subscriber_message(sub, incident, event):
     """Public-safe content only: the public name, never the monitored URL or the error text."""
-    sub = StatusSubscriber.objects.select_related("status_page", "monitor").filter(pk=subscriber_id).first()
-    incident = Incident.objects.select_related("monitor").filter(pk=incident_id).first()
-    if sub is None or incident is None or not sub.is_active:
-        return "gone"
     name = incident.monitor.public_name
-    if kind == "opened":
+    if event == "opened":
         subject = f"🔴 {name} недоступний"
         text = f"«{name}» недоступний з {incident.started_at:%Y-%m-%d %H:%M} UTC."
     else:
         subject = f"🟢 {name} знову працює"
-        text = f"«{name}» відновився о {incident.resolved_at:%Y-%m-%d %H:%M} UTC. Простій: {incident.resolved_at - incident.started_at}."
+        text = (
+            f"«{name}» відновився о {incident.resolved_at:%Y-%m-%d %H:%M} UTC. "
+            f"Простій: {incident.resolved_at - incident.started_at}."
+        )
     page_path = (
         reverse("group_status", args=[sub.status_page.slug])
         if sub.status_page_id
@@ -583,15 +587,83 @@ def send_subscriber_email(subscriber_id, incident_id, kind):
     )
     unsub = subscriptions.unsubscribe_url(sub)
     body = f"{text}\n\nСтатус: {subscriptions.absolute(page_path)}\n\nВідписатися: {unsub}"
-    EmailMessage(
+    return EmailMessage(
         subject,
         body,
         settings.DEFAULT_FROM_EMAIL,
         [sub.email],
         headers={"List-Unsubscribe": f"<{unsub}>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"},
-    ).send()
-    logger.info("subscriber mail sent", extra={"event": "subscriber_mail_sent", "subscriber_id": sub.pk, "kind": kind})
-    return "sent"
+    )
+
+
+_CLAIM = """
+UPDATE monitors_subscribernotification n SET claimed_at = %s
+FROM monitors_statussubscriber s
+WHERE n.subscriber_id = s.id AND n.incident_id = %s AND n.event = %s AND n.subscriber_id = ANY(%s)
+  AND n.sent_at IS NULL AND (n.claimed_at IS NULL OR n.claimed_at < %s)
+  AND s.confirmed_at IS NOT NULL AND s.unsubscribed_at IS NULL
+RETURNING n.subscriber_id
+"""
+
+
+@shared_task(**_RETRY)
+def send_notification_batch(incident_id, event, subscriber_ids):
+    """Mail one batch. Idempotent: a (incident, subscriber, event) row is created once (unique), CLAIMED with one
+    conditional UPDATE (a duplicate task or a retry finds nothing left to claim) and stamped `sent_at` right after
+    its mail went out. Anyone who unsubscribed is skipped, both when claiming and again just before their mail."""
+    incident = Incident.objects.select_related("monitor").filter(pk=incident_id).first()
+    if incident is None:
+        return {"claimed": 0, "sent": 0}
+    ids = list(subscriber_ids)
+    SubscriberNotification.objects.bulk_create(
+        [SubscriberNotification(incident_id=incident_id, subscriber_id=i, event=event) for i in ids],
+        ignore_conflicts=True,
+    )
+    now = timezone.now()
+    with connection.cursor() as cur:
+        cur.execute(_CLAIM, [now, incident_id, event, ids, now - NOTIFICATION_LEASE])
+        claimed = sorted(row[0] for row in cur.fetchall())  # RETURNING has no order; send in a stable one
+    subs = {s.pk: s for s in StatusSubscriber.objects.select_related("status_page", "monitor").filter(pk__in=claimed)}
+    sent = 0
+    try:
+        for sid in claimed:
+            sub = subs[sid]
+            # someone may have clicked "unsubscribe" since the claim: check right before sending
+            if not StatusSubscriber.objects.filter(
+                pk=sid, unsubscribed_at__isnull=True, confirmed_at__isnull=False
+            ).exists():
+                continue
+            _subscriber_message(sub, incident, event).send()
+            SubscriberNotification.objects.filter(incident_id=incident_id, subscriber_id=sid, event=event).update(
+                sent_at=timezone.now()
+            )
+            sent += 1
+    finally:
+        # whatever was claimed but not sent (a failure, or an unsubscribe) goes back to "unclaimed" so a retry can take it
+        SubscriberNotification.objects.filter(
+            incident_id=incident_id, event=event, subscriber_id__in=claimed, sent_at__isnull=True
+        ).update(claimed_at=None)
+    logger.info("notification batch", extra={"event": "notification_batch", "incident_id": incident_id, "sent": sent})
+    return {"claimed": len(claimed), "sent": sent}
+
+
+@shared_task
+def resume_stalled_notifications():
+    """Every couple of minutes: mails claimed by a worker that died (lease expired) and never sent are re-queued."""
+    stalled = (
+        SubscriberNotification.objects.filter(sent_at__isnull=True, claimed_at__lt=timezone.now() - NOTIFICATION_LEASE)
+        .values_list("incident_id", "event", "subscriber_id")
+        .order_by("incident_id", "event", "subscriber_id")
+    )
+    groups: dict[tuple, list] = {}
+    for incident_id, event, subscriber_id in stalled:
+        groups.setdefault((incident_id, event), []).append(subscriber_id)
+    queued = 0
+    for (incident_id, event), ids in groups.items():
+        for chunk in _chunks(ids, NOTIFICATION_BATCH):
+            send_notification_batch.delay(incident_id, event, chunk)
+            queued += 1
+    return queued
 
 
 @shared_task(**_RETRY)

@@ -148,6 +148,10 @@ CELERY_BEAT_SCHEDULE = {
         # piling work up.
         "schedule": 10.0,
     },
+    "resume-notifications": {
+        "task": "monitors.tasks.resume_stalled_notifications",
+        "schedule": 120.0,
+    },
     "expand-maintenance": {
         "task": "monitors.tasks.expand_maintenance",
         "schedule": crontab(minute=10),
@@ -217,7 +221,8 @@ CELERY_TASK_ROUTES = {
     "monitors.tasks.deliver_outbox_event": {"queue": "notifications"},
     "monitors.tasks.cleanup_outbox": {"queue": "notifications"},
     "monitors.tasks.notify_subscribers": {"queue": "notifications"},
-    "monitors.tasks.send_subscriber_email": {"queue": "notifications"},
+    "monitors.tasks.send_notification_batch": {"queue": "notifications"},
+    "monitors.tasks.resume_stalled_notifications": {"queue": "notifications"},
     "monitors.tasks.send_subscription_confirmation": {"queue": "notifications"},
     "reports.tasks.generate_report": {"queue": "reports"},
 }

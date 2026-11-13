@@ -291,25 +291,6 @@ def test_monitor_subscribers_only_get_their_own_monitor(user, pub_monitor):
     assert not mail.outbox
 
 
-def test_one_failing_recipient_does_not_block_the_others(page, monkeypatch):
-    m = page.monitors.get()
-    confirmed(page, "a@example.com")
-    confirmed(page, "b@example.com")
-    inc = Incident.objects.create(monitor=m, started_at=timezone.now())
-    from monitors import tasks
-
-    queued = []
-
-    def flaky_delay(subscriber_id, incident_id, kind):
-        queued.append(subscriber_id)
-        if len(queued) == 1:
-            raise ConnectionError("broker hiccup")
-
-    monkeypatch.setattr(tasks.send_subscriber_email, "delay", flaky_delay)
-    assert notify_subscribers(inc.pk, "opened") == 1  # one queued, one failed, no exception
-    assert len(queued) == 2
-
-
 def test_notify_for_a_deleted_incident_is_a_noop(db):
     assert notify_subscribers(999_999, "opened") == "gone"
 
