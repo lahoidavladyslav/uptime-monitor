@@ -1,48 +1,24 @@
-import ssl
 from datetime import timedelta
 
 import pytest
 import responses
-from django.core import mail
 from django.core.exceptions import ValidationError
 from django.urls import reverse
 from django.utils import timezone
 
-from monitors.checks import evaluate, headers_to_lines, parse_header_lines, parse_status_spec, status_ok
+from monitors.checks import headers_to_lines, parse_header_lines
 from monitors.forms import MaintenanceForm, MonitorForm
 from monitors.models import CheckResult, Incident, MaintenanceWindow, Monitor
 from monitors.tasks import (
     check_monitor,
-    check_ssl,
     due_monitors,
     perform_http_check,
-    schedule_ssl_checks,
-    ssl_level,
 )
 
 URL = "https://example.com"
 
 
 # ---------------- pure helpers ----------------
-@pytest.mark.parametrize(
-    "spec,code,ok",
-    [
-        ("", 200, True), ("", 301, True), ("", 404, False), ("", 500, False),
-        ("200", 200, True), ("200", 204, False),
-        ("200,204", 204, True), ("200-299,404", 404, True), ("200-299,404", 301, False),
-        ("401", 401, True),  # a protected endpoint can be "up" when it answers 401
-    ],
-)  # fmt: skip
-def test_status_spec(spec, code, ok):
-    assert status_ok(code, spec) is ok
-
-
-@pytest.mark.parametrize("bad", ["abc", "20", "200-", "600", "300-200", "99", "200;204"])
-def test_status_spec_rejects_garbage(bad):
-    with pytest.raises(ValidationError):
-        parse_status_spec(bad)
-
-
 def test_headers_parse_roundtrip_and_rules():
     parsed = parse_header_lines("Authorization: Bearer x:y\nAccept: application/json\n\n")
     assert parsed == {"Authorization": "Bearer x:y", "Accept": "application/json"}  # value may contain ':'
@@ -54,14 +30,6 @@ def test_headers_parse_roundtrip_and_rules():
         parse_header_lines("\n".join(f"H{i}: v" for i in range(11)))
 
 
-def test_evaluate_messages():
-    assert evaluate(200, "", "", "") == (True, None)
-    assert evaluate(500, "", "", "") == (False, "HTTP 500")
-    assert evaluate(404, "200,204", "", "") == (False, "Очікувався код 200,204, отримано 404")
-    assert evaluate(200, "", "welcome", "hello welcome") == (True, None)
-    assert evaluate(200, "", "welcome", "an empty page") == (False, "Очікуваний текст не знайдено у відповіді")
-
-
 # ---------------- HTTP behaviour ----------------
 @responses.activate
 def test_method_headers_and_body_are_sent():
@@ -69,7 +37,7 @@ def test_method_headers_and_body_are_sent():
     out = perform_http_check(
         URL, method="POST", headers={"X-Api-Key": "k", "Content-Type": "application/json"}, body='{"a":1}'
     )
-    assert out[2] is True
+    assert out.is_up is True
     req = responses.calls[0].request
     assert req.method == "POST" and req.body == b'{"a":1}'
     assert req.headers["X-Api-Key"] == "k" and req.headers["User-Agent"] == "UptimeMonitor/1.0"
@@ -78,46 +46,68 @@ def test_method_headers_and_body_are_sent():
 @responses.activate
 def test_head_does_not_send_body_or_read_it():
     responses.add(responses.HEAD, URL, status=200)
-    assert perform_http_check(URL, method="HEAD", body="ignored")[2] is True
+    assert perform_http_check(URL, method="HEAD", body="ignored").is_up is True
     assert responses.calls[0].request.body is None
 
 
+KEYWORD = {"keyword": "Welcome", "must_contain": True}
+
+
 @responses.activate
-def test_expected_text_present_and_missing():
+def test_keyword_present_and_missing():
     responses.add(responses.GET, URL, body="<h1>Welcome back</h1>", status=200)
-    assert perform_http_check(URL, expected_text="Welcome")[2] is True
-    up = perform_http_check(URL, expected_text="Maintenance")
-    assert up[2] is False and "не знайдено" in up[3]
-    assert up[0] == 200  # server answered 200 but the content is wrong -> still down
+    assert perform_http_check(URL, check_type="keyword", check_config=KEYWORD).is_up is True
+    out = perform_http_check(URL, check_type="keyword", check_config={"keyword": "Maintenance", "must_contain": True})
+    assert out.is_up is False and out.error == "keyword 'Maintenance' not found"
+    assert out.status_code == 200  # server answered 200 but the content is wrong -> still down
+    assert out.details["type"] == "keyword"
 
 
 @responses.activate
-def test_expected_text_search_is_capped(monkeypatch):
+def test_keyword_search_is_capped_and_says_it_was_truncated(monkeypatch):
     monkeypatch.setattr("monitors.tasks.MAX_BODY_BYTES", 100)
     responses.add(responses.GET, URL, body="a" * 200 + "NEEDLE", status=200)
-    assert perform_http_check(URL, expected_text="NEEDLE")[2] is False  # beyond the cap
+    out = perform_http_check(URL, check_type="keyword", check_config={"keyword": "NEEDLE", "must_contain": True})
+    assert out.is_up is False and "truncated" in out.error  # beyond the cap
 
 
 @responses.activate
-def test_expected_status_overrides_default():
+def test_a_huge_body_is_not_read_for_a_plain_status_check(monkeypatch):
+    read = []
+    monkeypatch.setattr("monitors.tasks._read_body", lambda *a, **k: read.append(1) or ("", False))
+    responses.add(responses.GET, URL, body="x" * 1000, status=200)
+    assert perform_http_check(URL).is_up is True and read == []
+
+
+@responses.activate
+def test_json_path_through_the_real_request_path():
+    responses.add(responses.GET, URL, json={"status": {"db": "degraded"}}, status=200)
+    out = perform_http_check(URL, check_type="json_path", check_config={"path": "status.db", "equals": "ok"})
+    assert not out.is_up and out.error == "status.db = 'degraded', expected 'ok'"
+
+
+@responses.activate
+def test_expected_statuses_override_the_default():
     responses.add(responses.GET, URL, status=401)
-    assert perform_http_check(URL)[2] is False
-    assert perform_http_check(URL, expected_status="401")[2] is True
+    assert perform_http_check(URL).is_up is False
+    assert perform_http_check(URL, check_config={"expected_statuses": [401]}).is_up is True
     responses.replace(responses.GET, URL, status=200)
-    out = perform_http_check(URL, expected_status="401")
-    assert out[2] is False and "Очікувався код 401" in out[3]
+    out = perform_http_check(URL, check_config={"expected_statuses": [401]})
+    assert out.is_up is False and out.error == "HTTP 200, expected one of [401]"
 
 
 @responses.activate
 def test_check_monitor_uses_the_monitor_configuration(user):
     m = Monitor.objects.create(
         user=user, name="api", url=URL, http_method="POST", request_headers={"X-A": "1"},
-        request_body="ping", expected_status="201", expected_text="created",
+        request_body="ping", check_type="keyword",
+        check_config={"keyword": "created", "must_contain": True, "expected_statuses": [201]},
     )  # fmt: skip
     responses.add(responses.POST, URL, status=201, body="resource created")
     assert check_monitor(m.pk) == "up"
     assert responses.calls[0].request.headers["X-A"] == "1"
-    assert CheckResult.objects.get().status_code == 201
+    result = CheckResult.objects.get()
+    assert result.status_code == 201 and result.details["type"] == "keyword"
 
 
 # ---------------- form ----------------
@@ -132,8 +122,8 @@ def test_form_accepts_valid_advanced_config(user):
         http_method="POST",
         request_body="x",
         request_headers="X-A: 1",
-        expected_status="200,204",
-        expected_text="ok",
+        check_type="keyword",
+        check_config={"keyword": "ok", "expected_statuses": [200, 204]},
     )
     assert f.is_valid(), f.errors
     m = f.save(commit=False)
@@ -143,9 +133,11 @@ def test_form_accepts_valid_advanced_config(user):
 @pytest.mark.parametrize(
     "over,field",
     [
-        ({"expected_status": "abc"}, "expected_status"),
+        ({"check_type": "keyword", "check_config": {}}, "check_config"),
+        ({"check_type": "keyword", "check_config": {"keyword": "x", "oops": 1}}, "check_config"),
+        ({"check_type": "ssl_expiry", "url": "http://a.com"}, "url"),
         ({"request_headers": "Host: x"}, "request_headers"),
-        ({"http_method": "HEAD", "expected_text": "x"}, "expected_text"),
+        ({"http_method": "HEAD", "check_type": "keyword", "check_config": {"keyword": "x"}}, "check_type"),
         ({"http_method": "GET", "request_body": "x"}, "request_body"),
         ({"http_method": "DELETE"}, "http_method"),
     ],
@@ -235,94 +227,3 @@ def test_dashboard_and_public_page_show_maintenance(auth_client, client, monitor
     window(monitor)
     assert "🛠 обслуговування" in auth_client.get(reverse("dashboard")).content.decode()
     assert "Планові роботи" in client.get(reverse("public_status", args=[monitor.public_slug])).content.decode()
-
-
-# ---------------- SSL ----------------
-@pytest.fixture
-def https_monitor(user):
-    return Monitor.objects.create(user=user, name="s", url="https://secure.example.com")
-
-
-def fake_expiry(monkeypatch, days):
-    monkeypatch.setattr(
-        "monitors.tasks.fetch_ssl_expiry", lambda host, port=443: timezone.now() + timedelta(days=days, hours=1)
-    )
-
-
-@pytest.mark.parametrize("days,level", [(60, None), (15, None), (14, 14), (10, 14), (3, 3), (1, 3), (0, 0)])
-def test_ssl_level(days, level):
-    assert ssl_level(days) == level
-
-
-def test_ssl_alert_sent_once_per_threshold_then_reset_on_renewal(https_monitor, monkeypatch):
-    fake_expiry(monkeypatch, 10)
-    check_ssl(https_monitor.pk)
-    check_ssl(https_monitor.pk)  # same day again: no second mail
-    assert len(mail.outbox) == 1 and "10 дн." in mail.outbox[0].subject
-
-    fake_expiry(monkeypatch, 2)  # crossed the next threshold -> another mail
-    check_ssl(https_monitor.pk)
-    check_ssl(https_monitor.pk)
-    assert len(mail.outbox) == 2 and "2 дн." in mail.outbox[1].subject
-
-    fake_expiry(monkeypatch, 90)  # certificate renewed -> state resets, no mail
-    check_ssl(https_monitor.pk)
-    https_monitor.refresh_from_db()
-    assert https_monitor.ssl_alerted_level is None and len(mail.outbox) == 2
-
-    fake_expiry(monkeypatch, 5)  # and the next expiry alerts again
-    check_ssl(https_monitor.pk)
-    assert len(mail.outbox) == 3
-
-
-def test_healthy_certificate_sends_nothing_and_is_stored(https_monitor, monkeypatch):
-    fake_expiry(monkeypatch, 80)
-    assert check_ssl(https_monitor.pk) == 80
-    https_monitor.refresh_from_db()
-    assert https_monitor.ssl_expires_at and not mail.outbox and https_monitor.ssl_error == ""
-
-
-def test_expired_certificate_alerts(https_monitor, monkeypatch):
-    def boom(host, port=443):
-        err = ssl.SSLCertVerificationError(1, "certificate verify failed: certificate has expired")
-        err.verify_message = "certificate has expired"
-        raise err
-
-    monkeypatch.setattr("monitors.tasks.fetch_ssl_expiry", boom)
-    assert check_ssl(https_monitor.pk) == "invalid"
-    https_monitor.refresh_from_db()
-    assert "прострочений" in https_monitor.ssl_error
-    assert len(mail.outbox) == 1 and "прострочений" in mail.outbox[0].subject
-
-
-def test_ssl_network_error_is_recorded_not_raised(https_monitor, monkeypatch):
-    def boom(host, port=443):
-        raise ConnectionRefusedError()
-
-    monkeypatch.setattr("monitors.tasks.fetch_ssl_expiry", boom)
-    assert check_ssl(https_monitor.pk) == "error"
-    assert not mail.outbox
-
-
-def test_ssl_check_skips_http_and_private_targets(user, monkeypatch):
-    plain = Monitor.objects.create(user=user, name="p", url="http://plain.example.com")
-    assert check_ssl(plain.pk) == "skipped"
-    monkeypatch.setattr("monitors.tasks.blocked_reason", lambda url: "private")
-    priv = Monitor.objects.create(user=user, name="i", url="https://internal.example.com")
-    assert check_ssl(priv.pk) == "blocked"
-
-
-def test_schedule_ssl_checks_only_active_https(user, monkeypatch):
-    queued = []
-    monkeypatch.setattr("monitors.tasks.check_ssl.delay", lambda pk: queued.append(pk))
-    a = Monitor.objects.create(user=user, name="a", url="https://a.com")
-    Monitor.objects.create(user=user, name="b", url="http://b.com")
-    Monitor.objects.create(user=user, name="c", url="https://c.com", is_active=False)
-    assert schedule_ssl_checks() == 1 and queued == [a.pk]
-
-
-def test_detail_page_shows_ssl_state(auth_client, https_monitor):
-    https_monitor.ssl_expires_at = timezone.now() + timedelta(days=2, hours=1)
-    https_monitor.save()
-    html = auth_client.get(reverse("monitor_detail", args=[https_monitor.pk])).content.decode()
-    assert "спливає через 2 дн." in html

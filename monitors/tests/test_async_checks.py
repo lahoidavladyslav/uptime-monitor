@@ -13,9 +13,7 @@ from monitors.async_checks import CheckItem, run_checks
 
 
 def item(i, host="a.example.com", **kw):
-    base = dict(
-        monitor_id=i, url=f"https://{host}/{i}", method="GET", headers={}, body="", expected_status="", expected_text=""
-    )
+    base = dict(monitor_id=i, url=f"https://{host}/{i}", method="GET", headers={}, body="")
     return CheckItem(**{**base, **kw})
 
 
@@ -62,9 +60,22 @@ def test_default_expected_statuses_match_the_single_check(status, up):
 
 
 def test_custom_expected_status_and_text_are_honoured():
-    ok = run([item(1, expected_status="204", expected_text="hello")], Counter(status=204, body=b"say hello"))[0]
-    bad = run([item(2, expected_text="needle")], Counter(body=b"haystack"))[0]
-    assert ok.is_up and not bad.is_up and "Очікуваний текст" in bad.error
+    ok = run(
+        [
+            item(
+                1,
+                check_type="keyword",
+                check_config={"keyword": "hello", "must_contain": True, "expected_statuses": [204]},
+            )
+        ],
+        Counter(status=204, body=b"say hello"),
+    )[0]
+    bad = run(
+        [item(2, check_type="keyword", check_config={"keyword": "needle", "must_contain": True})],
+        Counter(body=b"haystack"),
+    )[0]
+    assert ok.is_up and not bad.is_up and bad.error == "keyword 'needle' not found"
+    assert bad.details == {"type": "keyword", "status_code": 200, "message": "keyword 'needle' not found"}
 
 
 def test_timeouts_and_connection_errors_become_down_results_not_exceptions():
@@ -107,7 +118,9 @@ def test_redirects_are_not_followed_and_count_as_up_like_the_single_check():
 
 def test_only_the_first_megabyte_of_a_body_is_read_when_searching_for_text():
     big = b"x" * (3 * 1024 * 1024) + b"needle"  # the needle is beyond the limit
-    r = run([item(1, expected_text="needle")], Counter(body=big))[0]
+    r = run(
+        [item(1, check_type="keyword", check_config={"keyword": "needle", "must_contain": True})], Counter(body=big)
+    )[0]
     assert not r.is_up
 
 
@@ -244,8 +257,6 @@ def test_dns_rebinding_is_caught_at_connect_time(local_server, monkeypatch, sett
         method="GET",
         headers={},
         body="",
-        expected_status="",
-        expected_text="",
     )
     r = asyncio.run(run_checks([local], concurrency=5, per_host=2))[0]
     assert not r.is_up and "Заблоковано" in r.error
@@ -264,8 +275,6 @@ def test_private_targets_work_only_when_explicitly_allowed(local_server, setting
                     method="GET",
                     headers={},
                     body="",
-                    expected_status="",
-                    expected_text="",
                 )
             ],
             concurrency=5,

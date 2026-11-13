@@ -17,6 +17,7 @@ from .models import MaintenanceWindow, Monitor, StatusPage
 from .regions import region_status
 from .services import (
     PERIODS,
+    attach_counts_24h,
     cooldown_ok,
     dashboard_queryset,
     monitor_stats,
@@ -57,11 +58,12 @@ class DashboardView(HtmxLoginRequiredMixin, ListView):
         return [self.template_name]
 
     def get_queryset(self):
-        return dashboard_queryset(self.request.user)
+        return dashboard_queryset(self.request.user, counts=False)
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         now = timezone.now()
+        attach_counts_24h(ctx["monitors"], now)
         for m in ctx["monitors"]:
             m.uptime_24h = uptime_percent(m.checks_24h, m.up_24h)
             m.down_minutes = int((now - m.down_since).total_seconds() // 60) if m.down_since else None

@@ -15,6 +15,7 @@ from django.utils import timezone
 from monitors import regions
 from monitors.models import CheckResult, Incident, Monitor, OutboxEvent, WebhookEndpoint
 from monitors.tasks import check_monitor, record_check, schedule_checks
+from monitors.tests.helpers import outcome
 
 ROOT = Path(__file__).resolve().parents[2]
 EU, US, ASIA = "eu", "us", "asia"
@@ -48,10 +49,7 @@ def bare(user):
 
 def rec(m, region, up, ago=0, error="boom"):
     """Record one region's result the way check_monitor's write phase does."""
-    return record_check(
-        m.pk, region, timezone.now() - timedelta(seconds=ago), None if up else 503, 50 if up else None, up,
-        None if up else error,
-    )  # fmt: skip
+    return record_check(m.pk, region, timezone.now() - timedelta(seconds=ago), outcome(up, error=error))
 
 
 def incidents(m):

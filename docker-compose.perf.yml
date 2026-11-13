@@ -1,0 +1,13 @@
+# Performance run: docker compose -f docker-compose.yml -f docker-compose.perf.yml up -d   (see `make perf`)
+# manage_partitions drops raw checks older than CHECK_RETENTION_DAYS; the seeded data set spans 30 days.
+services:
+  web:
+    environment:
+      CHECK_RETENTION_DAYS: "31"
+      DEBUG_TOOLBAR: "1"
+  beat:
+    environment:
+      CHECK_RETENTION_DAYS: "31"
+  worker:
+    environment:
+      CHECK_RETENTION_DAYS: "31"

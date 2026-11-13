@@ -540,15 +540,17 @@ export interface components {
         /** MonitorConfigOut */
         MonitorConfigOut: {
             /**
-             * Expected Status
-             * @default
+             * Check Config
+             * @default {}
              */
-            expected_status: string;
+            check_config: {
+                [key: string]: unknown;
+            };
             /**
-             * Expected Text
-             * @default
+             * Check Type
+             * @default http_status
              */
-            expected_text: string;
+            check_type: string;
             /**
              * Http Method
              * @default GET
@@ -632,15 +634,17 @@ export interface components {
          */
         MonitorIn: {
             /**
-             * Expected Status
-             * @default
+             * Check Config
+             * @default {}
              */
-            expected_status: string;
+            check_config: {
+                [key: string]: unknown;
+            };
             /**
-             * Expected Text
-             * @default
+             * Check Type
+             * @default http_status
              */
-            expected_text: string;
+            check_type: string;
             /**
              * Http Method
              * @default GET

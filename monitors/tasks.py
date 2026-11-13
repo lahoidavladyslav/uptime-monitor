@@ -3,6 +3,7 @@ import logging
 import time
 from datetime import UTC, timedelta
 from smtplib import SMTPException
+from typing import NamedTuple
 
 import requests
 from celery import shared_task
@@ -10,11 +11,12 @@ from django.conf import settings
 from django.core.mail import EmailMessage, send_mail
 from django.db import IntegrityError, connection, transaction
 from django.db.models import DateTimeField, DurationField, ExpressionWrapper, F, Q, Value
+from django.db.models.functions import Coalesce
 from django.urls import reverse
 from django.utils import timezone
 
-from . import async_checks, maintenance, partitions, regions, rollups, subscriptions, webhooks
-from .checks import MAX_BODY_BYTES, evaluate
+from . import async_checks, check_types, maintenance, partitions, regions, rollups, subscriptions, webhooks
+from .checks import MAX_BODY_BYTES
 from .http_client import guarded_session
 from .models import (
     CheckResult,
@@ -22,7 +24,8 @@ from .models import (
     Monitor,
     MonitorRegion,
     OutboxEvent,
-    Subscriber,
+    StatusSubscriber,
+    SubscriberNotification,
 )
 from .security import blocked_reason
 
@@ -48,6 +51,7 @@ def due_monitors(now=None):
     one_second = Value(timedelta(seconds=1), output_field=DurationField())
     return (
         Monitor.objects.filter(is_active=True)
+        .exclude(check_type="ssl_expiry")  # checked once a day by check_ssl, not every interval
         .annotate(
             due_at=ExpressionWrapper(
                 F("last_checked_at") + F("interval_seconds") * one_second,
@@ -60,6 +64,9 @@ def due_monitors(now=None):
 
 def enqueue_checks(monitor_id, force=False):
     """One task per region, each on that region's own queue (`checks.<region>`)."""
+    kind = Monitor.objects.filter(pk=monitor_id).values_list("check_type", flat=True).first()
+    if kind is not None and not check_types.get(kind).needs_http:
+        return  # ssl_expiry: "check now" is check_ssl (the callers enqueue it), there is nothing to request here
     for region in settings.CHECK_REGIONS:
         check_monitor.apply_async(
             args=[monitor_id], kwargs={"force": force, "region": region}, queue=f"checks.{region}"
@@ -105,27 +112,47 @@ def schedule_checks():
 
 
 def _read_body(response, deadline):
-    """Read at most MAX_BODY_BYTES and never longer than the overall deadline (slow-drip servers)."""
-    chunks, size = [], 0
+    """Read at most MAX_BODY_BYTES and never longer than the overall deadline (slow-drip servers).
+
+    Returns (text, truncated): `truncated` means we stopped before the end of the body, so "not found" in it
+    proves less than usual and the check reports that.
+    """
+    chunks, size, truncated = [], 0, False
     for chunk in response.iter_content(chunk_size=8192):
         chunks.append(chunk)
         size += len(chunk)
         if size >= MAX_BODY_BYTES or time.monotonic() > deadline:
+            truncated = True
             break
-    return b"".join(chunks)[:MAX_BODY_BYTES].decode(response.encoding or "utf-8", errors="replace")
+    text = b"".join(chunks)[:MAX_BODY_BYTES].decode(response.encoding or "utf-8", errors="replace")
+    return text, truncated
 
 
-def perform_http_check(url, *, method="GET", headers=None, body="", expected_status="", expected_text=""):
-    """Returns (status_code, response_time_ms, is_up, error). Never raises."""
+class CheckOutcome(NamedTuple):
+    status_code: int | None
+    response_time_ms: int | None
+    is_up: bool
+    error: str | None
+    details: dict
+
+
+def _failed(message, **details):
+    return CheckOutcome(None, None, False, message, {"message": message, **details})
+
+
+def perform_http_check(url, *, method="GET", headers=None, body="", check_type="http_status", check_config=None):
+    """Run one HTTP check of any type. Returns a CheckOutcome. Never raises."""
+    strategy = check_types.get(check_type)
+    config = check_config or {}
     reason = blocked_reason(url)
     if reason:
-        return None, None, False, f"Заблоковано: {reason}"
+        return _failed(f"Заблоковано: {reason}", type=check_type)
     timeout = settings.CHECK_TIMEOUT_SECONDS
     started = time.monotonic()
     request_headers = {"User-Agent": "UptimeMonitor/1.0", **(headers or {})}
     try:
         # allow_redirects=False: 3xx counts as "up" by default, we don't chase it.
-        # stream=True: headers first; the body is read only when we must search it for text.
+        # stream=True: headers first; the body is read only for the types that look into it.
         with (
             guarded_session() as session,
             session.request(
@@ -139,15 +166,17 @@ def perform_http_check(url, *, method="GET", headers=None, body="", expected_sta
             ) as response,
         ):
             elapsed = round((time.monotonic() - started) * 1000)
-            body_text = _read_body(response, started + timeout) if expected_text and method != "HEAD" else ""
-            is_up, error = evaluate(response.status_code, expected_status, expected_text, body_text)
-            return response.status_code, elapsed, is_up, error
+            text, truncated = "", False
+            if strategy.needs_body and method != "HEAD":
+                text, truncated = _read_body(response, started + timeout)
+            result = strategy.evaluate_http(config, check_types.HttpResponse(response.status_code, text, truncated))
+            return CheckOutcome(response.status_code, elapsed, result.is_up, result.message, result.details)
     except requests.Timeout:
-        return None, None, False, f"Timeout after {timeout}s"
+        return _failed(f"Timeout after {timeout}s", type=check_type)
     except requests.RequestException as exc:
         if "non-public address" in str(exc):  # raised by the connection-level SSRF guard
-            return None, None, False, "Заблоковано: адреса веде у приватну/внутрішню мережу"
-        return None, None, False, f"{type(exc).__name__}: {exc}"[:500]
+            return _failed("Заблоковано: адреса веде у приватну/внутрішню мережу", type=check_type)
+        return _failed(f"{type(exc).__name__}: {exc}"[:500], type=check_type)
 
 
 FLAP_WINDOW = timedelta(minutes=15)
@@ -310,23 +339,23 @@ def check_monitor(monitor_id, force=False, region=None):
 
     cfg = (
         Monitor.objects.filter(pk=monitor_id)
-        .values("url", "http_method", "request_headers", "request_body", "expected_status", "expected_text")
+        .values("url", "http_method", "request_headers", "request_body", "check_type", "check_config")
         .first()
     )
     if cfg is None:
         return "skipped"
-    status_code, elapsed, is_up, error = perform_http_check(
+    outcome = perform_http_check(
         cfg["url"],
         method=cfg["http_method"],
         headers=cfg["request_headers"],
         body=cfg["request_body"],
-        expected_status=cfg["expected_status"],
-        expected_text=cfg["expected_text"],
+        check_type=cfg["check_type"],
+        check_config=cfg["check_config"],
     )
-    return record_check(monitor_id, region, started_at, status_code, elapsed, is_up, error)
+    return record_check(monitor_id, region, started_at, outcome)
 
 
-def record_check(monitor_id, region, checked_at, status_code, elapsed, is_up, error):
+def record_check(monitor_id, region, checked_at, outcome):
     """Write one region's result and let the quorum decide about the incident.
 
     The monitor row lock serialises everything that can change incident state, so regions reporting at the
@@ -341,17 +370,20 @@ def record_check(monitor_id, region, checked_at, status_code, elapsed, is_up, er
             monitor=monitor,
             region=region,
             checked_at=checked_at,
-            status_code=status_code,
-            response_time_ms=elapsed,
-            is_up=is_up,
-            error=error,
+            status_code=outcome.status_code,
+            response_time_ms=outcome.response_time_ms,
+            is_up=outcome.is_up,
+            error=outcome.error,
+            details=outcome.details,
             in_maintenance=in_window,
         )
         _maybe_stabilise(monitor, checked_at)
         verdict = regions.decide(monitor, result)
         if verdict is not None:
-            set_incident_state(monitor, verdict, checked_at, error if not verdict else None, in_maintenance=in_window)
-    return "up" if is_up else "down"
+            set_incident_state(
+                monitor, verdict, checked_at, outcome.error if not verdict else None, in_maintenance=in_window
+            )
+    return "up" if outcome.is_up else "down"
 
 
 def claim_batch(monitor_ids, region, force=False):
@@ -400,11 +432,11 @@ def check_batch(monitor_ids, region=None, force=False):
             method=c["http_method"],
             headers=c["request_headers"],
             body=c["request_body"],
-            expected_status=c["expected_status"],
-            expected_text=c["expected_text"],
+            check_type=c["check_type"],
+            check_config=c["check_config"],
         )
         for c in Monitor.objects.filter(pk__in=claimed).values(
-            "pk", "url", "http_method", "request_headers", "request_body", "expected_status", "expected_text"
+            "pk", "url", "http_method", "request_headers", "request_body", "check_type", "check_config"
         )
     ]
     rows = asyncio.run(
@@ -443,6 +475,7 @@ def record_batch(rows, region):
                     response_time_ms=r.response_time_ms,
                     is_up=r.is_up,
                     error=r.error,
+                    details=r.details,
                     in_maintenance=monitors[r.monitor_id].in_window,
                 )
                 for r in kept
@@ -514,36 +547,39 @@ _RETRY = dict(
 )
 
 
+NOTIFICATION_BATCH = 100
+NOTIFICATION_LEASE = timedelta(minutes=5)  # a claimed-but-unsent mail older than this belongs to a dead worker
+
+
 @shared_task
-def notify_subscribers(incident_id, kind):
-    """Fan out one task per recipient, so a failing address can't hold up or duplicate the others."""
+def notify_subscribers(incident_id, event):
+    """Split the recipients into batches of 100, one task per batch (not 10 000 mails in one task)."""
     incident = Incident.objects.select_related("monitor").filter(pk=incident_id).first()
     if incident is None:
         return "gone"
+    ids = [sub.pk for sub in subscriptions.recipients_for(incident)]
     queued = 0
-    for sub in subscriptions.recipients_for(incident):
+    for chunk in _chunks(ids, NOTIFICATION_BATCH):
         try:
-            send_subscriber_email.delay(sub.pk, incident_id, kind)
+            send_notification_batch.delay(incident_id, event, chunk)
             queued += 1
         except Exception:
-            logger.exception("could not queue subscriber mail", extra={"subscriber_id": sub.pk})
+            logger.exception("could not queue a notification batch", extra={"incident_id": incident_id})
     return queued
 
 
-@shared_task(**_RETRY)
-def send_subscriber_email(subscriber_id, incident_id, kind):
+def _subscriber_message(sub, incident, event):
     """Public-safe content only: the public name, never the monitored URL or the error text."""
-    sub = Subscriber.objects.select_related("status_page", "monitor").filter(pk=subscriber_id).first()
-    incident = Incident.objects.select_related("monitor").filter(pk=incident_id).first()
-    if sub is None or incident is None or not sub.is_confirmed:
-        return "gone"
     name = incident.monitor.public_name
-    if kind == "opened":
+    if event == "opened":
         subject = f"🔴 {name} недоступний"
         text = f"«{name}» недоступний з {incident.started_at:%Y-%m-%d %H:%M} UTC."
     else:
         subject = f"🟢 {name} знову працює"
-        text = f"«{name}» відновився о {incident.resolved_at:%Y-%m-%d %H:%M} UTC. Простій: {incident.resolved_at - incident.started_at}."
+        text = (
+            f"«{name}» відновився о {incident.resolved_at:%Y-%m-%d %H:%M} UTC. "
+            f"Простій: {incident.resolved_at - incident.started_at}."
+        )
     page_path = (
         reverse("group_status", args=[sub.status_page.slug])
         if sub.status_page_id
@@ -551,27 +587,95 @@ def send_subscriber_email(subscriber_id, incident_id, kind):
     )
     unsub = subscriptions.unsubscribe_url(sub)
     body = f"{text}\n\nСтатус: {subscriptions.absolute(page_path)}\n\nВідписатися: {unsub}"
-    EmailMessage(
+    return EmailMessage(
         subject,
         body,
         settings.DEFAULT_FROM_EMAIL,
         [sub.email],
         headers={"List-Unsubscribe": f"<{unsub}>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"},
-    ).send()
-    logger.info("subscriber mail sent", extra={"event": "subscriber_mail_sent", "subscriber_id": sub.pk, "kind": kind})
-    return "sent"
+    )
+
+
+_CLAIM = """
+UPDATE monitors_subscribernotification n SET claimed_at = %s
+FROM monitors_statussubscriber s
+WHERE n.subscriber_id = s.id AND n.incident_id = %s AND n.event = %s AND n.subscriber_id = ANY(%s)
+  AND n.sent_at IS NULL AND (n.claimed_at IS NULL OR n.claimed_at < %s)
+  AND s.confirmed_at IS NOT NULL AND s.unsubscribed_at IS NULL
+RETURNING n.subscriber_id
+"""
+
+
+@shared_task(**_RETRY)
+def send_notification_batch(incident_id, event, subscriber_ids):
+    """Mail one batch. Idempotent: a (incident, subscriber, event) row is created once (unique), CLAIMED with one
+    conditional UPDATE (a duplicate task or a retry finds nothing left to claim) and stamped `sent_at` right after
+    its mail went out. Anyone who unsubscribed is skipped, both when claiming and again just before their mail."""
+    incident = Incident.objects.select_related("monitor").filter(pk=incident_id).first()
+    if incident is None:
+        return {"claimed": 0, "sent": 0}
+    ids = list(subscriber_ids)
+    SubscriberNotification.objects.bulk_create(
+        [SubscriberNotification(incident_id=incident_id, subscriber_id=i, event=event) for i in ids],
+        ignore_conflicts=True,
+    )
+    now = timezone.now()
+    with connection.cursor() as cur:
+        cur.execute(_CLAIM, [now, incident_id, event, ids, now - NOTIFICATION_LEASE])
+        claimed = sorted(row[0] for row in cur.fetchall())  # RETURNING has no order; send in a stable one
+    subs = {s.pk: s for s in StatusSubscriber.objects.select_related("status_page", "monitor").filter(pk__in=claimed)}
+    sent = 0
+    try:
+        for sid in claimed:
+            sub = subs[sid]
+            # someone may have clicked "unsubscribe" since the claim: check right before sending
+            if not StatusSubscriber.objects.filter(
+                pk=sid, unsubscribed_at__isnull=True, confirmed_at__isnull=False
+            ).exists():
+                continue
+            _subscriber_message(sub, incident, event).send()
+            SubscriberNotification.objects.filter(incident_id=incident_id, subscriber_id=sid, event=event).update(
+                sent_at=timezone.now()
+            )
+            sent += 1
+    finally:
+        # whatever was claimed but not sent (a failure, or an unsubscribe) goes back to "unclaimed" so a retry can take it
+        SubscriberNotification.objects.filter(
+            incident_id=incident_id, event=event, subscriber_id__in=claimed, sent_at__isnull=True
+        ).update(claimed_at=None)
+    logger.info("notification batch", extra={"event": "notification_batch", "incident_id": incident_id, "sent": sent})
+    return {"claimed": len(claimed), "sent": sent}
+
+
+@shared_task
+def resume_stalled_notifications():
+    """Every couple of minutes: mails claimed by a worker that died (lease expired) and never sent are re-queued."""
+    stalled = (
+        SubscriberNotification.objects.filter(sent_at__isnull=True, claimed_at__lt=timezone.now() - NOTIFICATION_LEASE)
+        .values_list("incident_id", "event", "subscriber_id")
+        .order_by("incident_id", "event", "subscriber_id")
+    )
+    groups: dict[tuple, list] = {}
+    for incident_id, event, subscriber_id in stalled:
+        groups.setdefault((incident_id, event), []).append(subscriber_id)
+    queued = 0
+    for (incident_id, event), ids in groups.items():
+        for chunk in _chunks(ids, NOTIFICATION_BATCH):
+            send_notification_batch.delay(incident_id, event, chunk)
+            queued += 1
+    return queued
 
 
 @shared_task(**_RETRY)
 def send_subscription_confirmation(subscriber_id):
-    sub = Subscriber.objects.select_related("status_page", "monitor").filter(pk=subscriber_id).first()
-    if sub is None or sub.is_confirmed:
+    sub = StatusSubscriber.objects.select_related("status_page", "monitor").filter(pk=subscriber_id).first()
+    if sub is None or sub.is_confirmed or sub.unsubscribed_at is not None:
         return "skipped"
     title = sub.status_page.title if sub.status_page_id else sub.monitor.public_name
     send_mail(
         f"Підтвердіть підписку: {title}",
         f"Ви (або хтось інший) попросили надсилати сповіщення про збої «{title}» на цю адресу.\n\n"
-        f"Підтвердити підписку (діє 3 дні): {subscriptions.confirm_url(sub)}\n\n"
+        f"Підтвердити підписку (діє 48 годин): {subscriptions.confirm_url(sub)}\n\n"
         "Якщо це були не ви — просто проігноруйте цей лист, нічого не буде надіслано.",
         settings.DEFAULT_FROM_EMAIL,
         [sub.email],
@@ -581,9 +685,15 @@ def send_subscription_confirmation(subscriber_id):
 
 @shared_task
 def cleanup_unconfirmed_subscribers():
-    """Pending rows whose confirmation link has expired (they can never be confirmed any more)."""
+    """Pending rows whose confirmation link has expired (it can never be used any more). Age counts from the LAST
+    confirmation mail, so someone who re-subscribed an old row is not purged the moment they ask."""
     cutoff = timezone.now() - timedelta(seconds=subscriptions.CONFIRM_MAX_AGE)
-    deleted, _ = Subscriber.objects.filter(confirmed_at__isnull=True, created_at__lt=cutoff).delete()
+    deleted, _ = (
+        StatusSubscriber.objects.filter(confirmed_at__isnull=True, unsubscribed_at__isnull=True)
+        .annotate(last_mail=Coalesce("confirmation_sent_at", "created_at"))
+        .filter(last_mail__lt=cutoff)
+        .delete()
+    )
     return deleted
 
 
@@ -595,7 +705,7 @@ def manage_partitions():
 
 
 # ----------------------------- SSL certificate expiry -----------------------------
-SSL_THRESHOLDS = (14, 3, 0)  # alert once when each is crossed
+SSL_THRESHOLDS = (14, 7, 1, 0)  # days; announced once each per certificate (0 = expired)
 
 
 def fetch_ssl_expiry(host, port=443):
@@ -614,14 +724,9 @@ def fetch_ssl_expiry(host, port=443):
     return datetime.fromtimestamp(ssl.cert_time_to_seconds(not_after), tz=UTC)
 
 
-def ssl_level(days_left):
-    """Which alert threshold is currently crossed (smallest one), or None."""
-    crossed = [t for t in SSL_THRESHOLDS if days_left <= t]
-    return min(crossed) if crossed else None
-
-
 @shared_task
 def schedule_ssl_checks():
+    """Once a day (beat, 04:00): every active https monitor, including the ones of type ssl_expiry."""
     ids = list(Monitor.objects.filter(is_active=True, url__istartswith="https://").values_list("pk", flat=True))
     for monitor_id in ids:
         check_ssl.delay(monitor_id)
@@ -630,6 +735,8 @@ def schedule_ssl_checks():
 
 @shared_task
 def check_ssl(monitor_id):
+    """Read the certificate, keep ssl_expires_at/ssl_error current, announce crossed thresholds, and, for monitors
+    of type ssl_expiry, record the verdict as a CheckResult (so incidents/uptime work like for any other check)."""
     import ssl
     from urllib.parse import urlsplit
 
@@ -644,38 +751,55 @@ def check_ssl(monitor_id):
         expires = fetch_ssl_expiry(parts.hostname, parts.port or 443)
     except ssl.SSLCertVerificationError as exc:
         expired = "expired" in str(exc).lower()
-        Monitor.objects.filter(pk=monitor.pk).update(
-            ssl_error="Сертифікат прострочений" if expired else f"Помилка сертифіката: {exc.verify_message}"[:200],
-            ssl_expires_at=now if expired else None,
-        )
+        message = "Сертифікат прострочений" if expired else f"Помилка сертифіката: {exc.verify_message}"[:200]
+        Monitor.objects.filter(pk=monitor.pk).update(ssl_error=message, ssl_expires_at=now if expired else None)
         if expired:
-            _maybe_alert(monitor, 0)
+            _apply_ssl_thresholds(monitor, now, 0)
+        reason = "certificate has expired" if expired else f"certificate is invalid: {exc.verify_message}"
+        _record_ssl_result(monitor, now, False, reason, {"type": "ssl_expiry", "days_left": 0})
         return "invalid"
     except (OSError, ssl.SSLError) as exc:
+        # not a verdict about the certificate (the network may be down): no result, no incident
         Monitor.objects.filter(pk=monitor.pk).update(ssl_error=f"{type(exc).__name__}"[:200])
         return "error"
 
     days_left = (expires - now).days if expires > now else 0
+    previous_expiry = monitor.ssl_expires_at
     Monitor.objects.filter(pk=monitor.pk).update(ssl_expires_at=expires, ssl_error="")
-    _maybe_alert(monitor, ssl_level(days_left), days_left)
+    renewed = previous_expiry is not None and expires > previous_expiry + timedelta(days=1)
+    _apply_ssl_thresholds(monitor, expires, days_left, renewed=renewed)
+    if monitor.check_type == "ssl_expiry":
+        verdict = check_types.get("ssl_expiry").evaluate_ssl(monitor.check_config, days_left)
+        _record_ssl_result(monitor, now, verdict.is_up, verdict.message, verdict.details)
     return days_left
 
 
-def _maybe_alert(monitor, level, days_left=0):
-    """One mail per threshold: 14d -> 3d -> expired. Renewal resets the state."""
-    if level is None:
-        if monitor.ssl_alerted_level is not None:
-            Monitor.objects.filter(pk=monitor.pk).update(ssl_alerted_level=None)
+def _record_ssl_result(monitor, at, is_up, message, details):
+    if monitor.check_type != "ssl_expiry":
         return
-    if monitor.ssl_alerted_level is None or level < monitor.ssl_alerted_level:
-        # conditional update = atomic claim, so two workers can't both send
-        claimed = (
-            Monitor.objects.filter(pk=monitor.pk)
-            .filter(Q(ssl_alerted_level__isnull=True) | Q(ssl_alerted_level__gt=level))
-            .update(ssl_alerted_level=level)
-        )
-        if claimed:
-            send_ssl_alert.delay(monitor.pk, days_left)
+    Monitor.objects.filter(pk=monitor.pk).update(last_checked_at=at)
+    record_check(
+        monitor.pk,
+        regions.default_region(),
+        at,
+        CheckOutcome(
+            None, None, is_up, None if is_up else message, details if is_up else {**details, "message": message}
+        ),
+    )
+
+
+def _apply_ssl_thresholds(monitor, expires, days_left, renewed=False):
+    """Mail once per threshold per certificate. `monitor` is the row as the caller read it: the state change is a
+    conditional UPDATE on exactly that value, so of two workers that read the same row only one wins and sends."""
+    seen = [] if renewed else list(monitor.ssl_notified)
+    crossed = [t for t in SSL_THRESHOLDS if days_left <= t]
+    new_state = sorted(set(seen) | set(crossed), reverse=True) if crossed else []  # healthy again: forget everything
+    if new_state == list(monitor.ssl_notified):
+        return
+    won = Monitor.objects.filter(pk=monitor.pk, ssl_notified=monitor.ssl_notified).update(ssl_notified=new_state)
+    # the state only changes when a threshold is newly crossed (or everything is forgotten, when `crossed` is empty)
+    if won and crossed:
+        send_ssl_alert.delay(monitor.pk, days_left)
 
 
 @shared_task(

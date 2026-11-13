@@ -35,9 +35,9 @@ def test_connection_to_private_peer_is_refused_even_if_dns_said_public(local_ser
     """DNS rebinding: the pre-flight check passed, the real socket points at 127.0.0.1."""
     port, hits = local_server
     monkeypatch.setattr("monitors.tasks.blocked_reason", lambda url: None)  # pre-check fooled
-    status, ms, is_up, error = perform_http_check(f"http://127.0.0.1:{port}/")
-    assert (status, is_up) == (None, False)
-    assert "Заблоковано" in error
+    out = perform_http_check(f"http://127.0.0.1:{port}/")
+    assert (out.status_code, out.is_up) == (None, False)
+    assert "Заблоковано" in out.error
 
 
 def test_guard_can_be_disabled_for_local_dev(local_server, settings):

@@ -22,8 +22,8 @@
     <h2 class="h6">Конфігурація перевірки</h2>
     <div class="small">
       <div>Метод: <strong>{{ monitor.http_method }}</strong></div>
-      <div>Очікувані коди: <strong>{{ monitor.expected_status|default:"2xx / 3xx" }}</strong></div>
-      {% if monitor.expected_text %}<div>Має містити: <code>{{ monitor.expected_text }}</code></div>{% endif %}
+      <div>Тип перевірки: <strong>{{ monitor.get_check_type_display }}</strong></div>
+      {% if monitor.check_config %}<div>Налаштування: <code>{{ monitor.check_config }}</code></div>{% endif %}
       {% if monitor.request_headers %}<div>Заголовків: {{ monitor.request_headers|length }}</div>{% endif %}
     </div>
     {% if region_rows|length > 1 %}

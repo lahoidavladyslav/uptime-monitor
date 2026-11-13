@@ -13,12 +13,12 @@ from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
 
-from .models import StatusPage, Subscriber
+from .models import StatusPage, StatusSubscriber
 
 logger = logging.getLogger("subscriptions")
 
 CONFIRM_SALT = "subscription-confirm"
-CONFIRM_MAX_AGE = 3 * 24 * 3600
+CONFIRM_MAX_AGE = 48 * 3600  # the confirmation link lives 48 hours
 
 
 def absolute(path: str) -> str:
@@ -50,35 +50,42 @@ def rate_limited(ip: str | None) -> bool:
 
 def request_subscription(target, email: str) -> None:
     """Create/refresh a pending subscription and queue its confirmation mail. Silent no-op when the
-    address is already confirmed, was mailed a few minutes ago, or the target is full."""
+    address is already active, was mailed a few minutes ago, or the target is full.
+
+    An address that had unsubscribed starts over: the row is reset to "pending" (old consent is not reused)."""
     from .tasks import send_subscription_confirmation
 
     email = email.strip().lower()
     field = "status_page" if isinstance(target, StatusPage) else "monitor"
-    existing = Subscriber.objects.filter(**{field: target})
-    sub = existing.filter(email=email).first()
+    existing = StatusSubscriber.objects.filter(**{field: target})
+    sub = existing.filter(email__iexact=email).first()
     if sub is None:
-        if existing.count() >= settings.MAX_SUBSCRIBERS_PER_TARGET:
+        if existing.filter(unsubscribed_at__isnull=True).count() >= settings.MAX_SUBSCRIBERS_PER_TARGET:
             logger.warning("subscriber cap reached", extra={"event": "subscription_cap", field: target.pk})
             return
-        sub = Subscriber.objects.create(**{field: target}, email=email)
+        sub = StatusSubscriber.objects.create(**{field: target}, email=email)
+    elif sub.unsubscribed_at is not None:
+        StatusSubscriber.objects.filter(pk=sub.pk).update(
+            unsubscribed_at=None, confirmed_at=None, confirmation_sent_at=None
+        )
+        sub.refresh_from_db()
     elif sub.is_confirmed:
         return
     cooldown = timedelta(minutes=settings.SUBSCRIBE_RESEND_COOLDOWN_MINUTES)
     if sub.confirmation_sent_at and timezone.now() - sub.confirmation_sent_at < cooldown:
         return
-    Subscriber.objects.filter(pk=sub.pk).update(confirmation_sent_at=timezone.now())
+    StatusSubscriber.objects.filter(pk=sub.pk).update(confirmation_sent_at=timezone.now())
     logger.info("confirmation requested", extra={"event": "subscription_requested", "subscriber_id": sub.pk})
     send_subscription_confirmation.delay(sub.pk)
 
 
 def confirm(token: str):
-    """The confirmed Subscriber, or None for a bad/expired/orphaned token. Idempotent."""
+    """The confirmed StatusSubscriber, or None for a bad/expired/orphaned/unsubscribed token. Idempotent."""
     try:
         pk = signing.loads(token, salt=CONFIRM_SALT, max_age=CONFIRM_MAX_AGE)
     except signing.BadSignature:
         return None
-    sub = Subscriber.objects.filter(pk=pk).first()
+    sub = StatusSubscriber.objects.filter(pk=pk, unsubscribed_at__isnull=True).first()
     if sub is None:
         return None
     if not sub.is_confirmed:
@@ -89,12 +96,13 @@ def confirm(token: str):
 
 
 def unsubscribe(token: str) -> None:
-    """Delete by capability token. Unknown tokens are ignored (same answer either way)."""
-    sub = Subscriber.objects.filter(unsub_token=token).first()
-    if sub is not None:
-        subscriber_id = sub.pk  # Django clears pk on delete()
-        sub.delete()
-        logger.info("unsubscribed", extra={"event": "unsubscribed", "subscriber_id": subscriber_id})
+    """Soft opt-out by capability token: stamp `unsubscribed_at` once (idempotent, atomic). Unknown tokens are ignored
+    (same answer either way)."""
+    sub = StatusSubscriber.objects.filter(unsub_token=token, unsubscribed_at__isnull=True).first()
+    if sub is not None and StatusSubscriber.objects.filter(pk=sub.pk, unsubscribed_at__isnull=True).update(
+        unsubscribed_at=timezone.now()
+    ):
+        logger.info("unsubscribed", extra={"event": "unsubscribed", "subscriber_id": sub.pk})
 
 
 def recipients_for(incident):
@@ -106,7 +114,7 @@ def recipients_for(incident):
         wanted |= Q(monitor=monitor)
     seen, result = set(), []
     for sub in (
-        Subscriber.objects.filter(wanted, confirmed_at__isnull=False)
+        StatusSubscriber.objects.filter(wanted, confirmed_at__isnull=False, unsubscribed_at__isnull=True)
         .select_related("status_page", "monitor")
         .order_by("id")
         .distinct()

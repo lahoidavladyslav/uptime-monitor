@@ -14,9 +14,9 @@ VALID = {"name": "Site", "url": "https://new.example.org", "interval_seconds": 3
         ({"url": "ftp://x.com"}, "url"),
         ({"url": "http://127.0.0.1/"}, "url"),
         ({"url": "https://example.com"}, "url"),  # duplicate of the fixture monitor
-        ({"expected_status": "abc"}, "expected_status"),
+        ({"check_type": "keyword", "check_config": {}}, "check_config"),
         ({"request_headers": "Host: x"}, "request_headers"),
-        ({"http_method": "HEAD", "expected_text": "hello"}, "expected_text"),
+        ({"http_method": "HEAD", "check_type": "keyword", "check_config": {"keyword": "x"}}, "check_type"),
         ({"interval_seconds": 7}, "interval_seconds"),
     ],
 )

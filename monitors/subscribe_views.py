@@ -9,7 +9,7 @@ from config.observability import client_ip
 
 from . import subscriptions
 from .formkit import BootstrapFormMixin
-from .models import Monitor, StatusPage, Subscriber
+from .models import Monitor, StatusPage, StatusSubscriber
 
 
 class SubscribeForm(BootstrapFormMixin, forms.Form):
@@ -54,5 +54,5 @@ def unsubscribe(request, token):
     if request.method == "POST":
         subscriptions.unsubscribe(token)
         return render(request, "monitors/unsubscribed.html")
-    exists = Subscriber.objects.filter(unsub_token=token).exists()
+    exists = StatusSubscriber.objects.filter(unsub_token=token).exists()
     return render(request, "monitors/unsubscribe_confirm.html", {"exists": exists, "token": token})

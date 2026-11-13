@@ -1,7 +1,8 @@
 from django import forms
 from django.utils import timezone
 
-from .checks import headers_to_lines, parse_header_lines, parse_status_spec
+from . import check_types
+from .checks import headers_to_lines, parse_header_lines
 from .formkit import BootstrapFormMixin, HttpURLField
 from .maintenance import validate_rrule, validate_timezone
 from .models import MaintenanceWindow, Monitor, StatusPage, WebhookEndpoint
@@ -24,10 +25,10 @@ class MonitorForm(BootstrapFormMixin, forms.ModelForm):
             "http_method",
             "request_headers",
             "request_body",
-            "expected_status",
-            "expected_text",
+            "check_type",
+            "check_config",
         ]
-        widgets = {"request_body": forms.Textarea(attrs={"rows": 3})}
+        widgets = {"request_body": forms.Textarea(attrs={"rows": 3}), "check_config": forms.Textarea(attrs={"rows": 3})}
 
     public_logo_url = HttpURLField(label="Логотип (URL)", required=False, max_length=500)
     request_headers = forms.CharField(
@@ -41,6 +42,7 @@ class MonitorForm(BootstrapFormMixin, forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.user = user
         self.fields["http_method"].required = False
+        self.fields["check_type"].required = False  # omitted = the default plain status check
         if self.instance.pk:
             self.initial["request_headers"] = headers_to_lines(self.instance.request_headers)
 
@@ -57,16 +59,19 @@ class MonitorForm(BootstrapFormMixin, forms.ModelForm):
     def clean_request_headers(self):
         return parse_header_lines(self.cleaned_data.get("request_headers", ""))
 
-    def clean_expected_status(self):
-        value = self.cleaned_data.get("expected_status", "").strip()
-        parse_status_spec(value)  # raises ValidationError with a friendly message
-        return value
+    def clean_check_type(self):
+        return self.cleaned_data.get("check_type") or "http_status"
+
+    def clean_check_config(self):
+        # an emptied textarea means "no settings"; the per-type rules run in Monitor.clean()
+        return self.cleaned_data.get("check_config") or {}
 
     def clean(self):
         cleaned = super().clean()
         method = cleaned.get("http_method")
-        if method == "HEAD" and cleaned.get("expected_text"):
-            self.add_error("expected_text", "HEAD не повертає тіла — пошук тексту неможливий.")
+        strategy = check_types.REGISTRY.get(cleaned.get("check_type"))
+        if method == "HEAD" and strategy and strategy.needs_body:
+            self.add_error("check_type", "HEAD не повертає тіла — цей тип перевірки з ним неможливий.")
         if method != "POST" and cleaned.get("request_body"):
             self.add_error("request_body", "Тіло запиту доступне лише для POST.")
         url = cleaned.get("url")

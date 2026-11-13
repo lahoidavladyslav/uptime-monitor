@@ -2,12 +2,16 @@ import secrets
 import uuid
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.db import models
 from django.db.models import Func, Q, Value
+from django.db.models.functions import Lower
 from django.utils import timezone
 
 from accounts.fields import EncryptedTextField
+
+from . import check_types
 
 http_url_validator = URLValidator(schemes=["http", "https"])
 
@@ -29,17 +33,15 @@ class Monitor(models.Model):
     last_checked_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # --- what is checked (see check_types.py) ---
+    check_type = models.CharField("Тип перевірки", max_length=20, choices=check_types.CHOICES, default="http_status")
+    check_config = models.JSONField("Налаштування перевірки", default=dict, blank=True)
+
     # --- advanced check configuration ---
     METHOD_CHOICES = [("GET", "GET"), ("HEAD", "HEAD"), ("POST", "POST")]
     http_method = models.CharField("Метод", max_length=4, choices=METHOD_CHOICES, default="GET")
     request_headers = models.JSONField("Заголовки", default=dict, blank=True)
     request_body = models.TextField("Тіло запиту", blank=True, default="", max_length=10_000)
-    expected_status = models.CharField(
-        "Очікувані коди", max_length=100, blank=True, default="", help_text="Напр. 200,204,300-399. Порожньо = 2xx/3xx."
-    )
-    expected_text = models.CharField(
-        "Очікуваний текст", max_length=200, blank=True, default="", help_text="Має бути у тілі відповіді."
-    )
 
     # --- public page branding ---
     public_title = models.CharField("Назва на публічній сторінці", max_length=100, blank=True, default="")
@@ -50,7 +52,8 @@ class Monitor(models.Model):
     # --- SSL certificate expiry (filled by a daily task) ---
     ssl_expires_at = models.DateTimeField(null=True, blank=True)
     ssl_error = models.CharField(max_length=200, blank=True, default="")
-    ssl_alerted_level = models.PositiveSmallIntegerField(null=True, blank=True)  # smallest threshold already mailed
+    # thresholds (days) already mailed for the CURRENT certificate; reset when it is renewed or healthy again
+    ssl_notified = models.JSONField(default=list, blank=True)
 
     # set while the monitor changes state too often (see tasks.set_incident_state): alerts are muted meanwhile
     flapping_since = models.DateTimeField(null=True, blank=True)
@@ -68,7 +71,27 @@ class Monitor(models.Model):
     def public_name(self):
         return self.public_title or self.name
 
+    def clean(self):
+        super().clean()
+        errors = {}
+        try:
+            self.check_config = check_types.validate_config(self.check_type, self.check_config)
+        except ValidationError as exc:
+            for field, messages in exc.message_dict.items():
+                if field == "check_type":
+                    errors["check_type"] = messages
+                else:
+                    errors.setdefault("check_config", []).extend(f"{field}: {m}" for m in messages)
+        if self.check_type == "ssl_expiry" and not (self.url or "").lower().startswith("https://"):
+            errors["url"] = ["Перевірка терміну SSL можлива лише для https-адреси."]
+        if errors:
+            raise ValidationError(errors)
+
     def save(self, *args, **kwargs):
+        # An invalid check config must never reach the database, whichever way the monitor is written.
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or {"check_type", "check_config", "url"} & set(update_fields):
+            self.clean()
         # Slug is generated once, on first publication, and then never changes.
         if self.is_public and not self.public_slug:
             self.public_slug = secrets.token_urlsafe(9)
@@ -100,6 +123,8 @@ class CheckResult(models.Model):
     region = models.CharField(max_length=16, default="eu")  # which region's worker made the request
     # stamped at write time: the check ran inside a maintenance window, so it counts towards no uptime/average
     in_maintenance = models.BooleanField(default=False)
+    # why the check failed, structured: {"type": "keyword", "status_code": 200, "message": "keyword 'Welcome' not found"}
+    details = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["-checked_at", "-id"]
@@ -237,22 +262,24 @@ class CheckRollupHourly(models.Model):
         indexes = [models.Index(fields=["hour"], name="hourly_hour_idx")]
 
 
-class Subscriber(models.Model):
+class StatusSubscriber(models.Model):
     """An email address that wants incident mails for one public status page or one public monitor.
 
-    Double opt-in: a row exists from the moment someone types the address, but it only receives mail
-    once `confirmed_at` is set by clicking the emailed link. Unconfirmed rows are purged after the link
-    expires. `unsub_token` is a permanent capability for the one-click unsubscribe link in every mail.
+    Double opt-in: a row exists from the moment someone types the address, but it only receives mail once
+    `confirmed_at` is set by clicking the emailed link (valid 48 h). Unsubscribing is SOFT: `unsubscribed_at` is
+    stamped and the row stays (counts, proof of the opt-out, no re-mailing). Subscribing again resets the row to
+    "pending": the old consent is not reused. `unsub_token` is the capability behind the one-click link in mails.
     """
 
     status_page = models.ForeignKey(
         StatusPage, null=True, blank=True, on_delete=models.CASCADE, related_name="subscribers"
     )
     monitor = models.ForeignKey(Monitor, null=True, blank=True, on_delete=models.CASCADE, related_name="subscribers")
-    email = models.EmailField(max_length=254)  # stored lower-case
+    email = models.EmailField(max_length=254)  # stored lower-case; uniqueness ignores case anyway (constraints)
     unsub_token = models.CharField(max_length=64, unique=True, default=_new_token)
     confirmed_at = models.DateTimeField(null=True, blank=True)
     confirmation_sent_at = models.DateTimeField(null=True, blank=True)
+    unsubscribed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -263,18 +290,46 @@ class Subscriber(models.Model):
                 name="subscriber_exactly_one_target",
             ),
             models.UniqueConstraint(
-                fields=["status_page", "email"],
+                "status_page",
+                Lower("email"),
                 condition=Q(status_page__isnull=False),
                 name="uniq_subscriber_page_email",
             ),
             models.UniqueConstraint(
-                fields=["monitor", "email"], condition=Q(monitor__isnull=False), name="uniq_subscriber_monitor_email"
+                "monitor", Lower("email"), condition=Q(monitor__isnull=False), name="uniq_subscriber_monitor_email"
             ),
         ]
 
     @property
     def is_confirmed(self):
         return self.confirmed_at is not None
+
+    @property
+    def is_active(self):
+        """Receives incident mail: confirmed and not unsubscribed."""
+        return self.confirmed_at is not None and self.unsubscribed_at is None
+
+
+class SubscriberNotification(models.Model):
+    """The idempotency key of one mail: (incident, subscriber, event) exists at most once, however many times a task
+    is delivered, retried or re-run. `claimed_at` is a lease (a worker is sending it, or died trying); `sent_at` is
+    the proof that it went out."""
+
+    incident = models.ForeignKey(Incident, on_delete=models.CASCADE, related_name="subscriber_notifications")
+    subscriber = models.ForeignKey(StatusSubscriber, on_delete=models.CASCADE, related_name="notifications")
+    event = models.CharField(max_length=20)  # opened | resolved
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["incident", "subscriber", "event"], name="uniq_notification_per_event")
+        ]
+        indexes = [
+            # the resume job looks for "claimed but never finished"
+            models.Index(fields=["claimed_at"], condition=Q(sent_at__isnull=True), name="notif_unfinished_idx"),
+        ]
 
 
 def _new_webhook_secret():

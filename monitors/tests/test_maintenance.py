@@ -12,6 +12,7 @@ from monitors import maintenance, rollups
 from monitors.models import CheckResult, Incident, MaintenanceWindow, Monitor
 from monitors.services import dashboard_rows, monitor_stats, uptime_by_monitor
 from monitors.tasks import check_monitor, due_monitors, expand_maintenance, record_check
+from monitors.tests.helpers import outcome
 from reports.tasks import build_rows
 
 KYIV = "Europe/Kyiv"
@@ -187,17 +188,17 @@ def test_checks_are_still_scheduled_and_executed_during_a_window(user, mon):
 
 
 def test_a_check_outside_any_window_is_not_flagged(user, mon):
-    record_check(mon.pk, "eu", timezone.now(), 200, 10, True, None)
+    record_check(mon.pk, "eu", timezone.now(), outcome(True))
     assert CheckResult.objects.get().in_maintenance is False
 
 
 # ---------------- incidents ----------------
 def down(mon, at=None):
-    return record_check(mon.pk, "eu", at or timezone.now(), 503, None, False, "boom")
+    return record_check(mon.pk, "eu", at or timezone.now(), outcome(False))
 
 
 def up(mon, at=None):
-    return record_check(mon.pk, "eu", at or timezone.now(), 200, 20, True, None)
+    return record_check(mon.pk, "eu", at or timezone.now(), outcome(True, ms=20))
 
 
 def test_no_incident_is_opened_inside_a_window_and_one_opens_after_it(user, mon):

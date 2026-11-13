@@ -22,7 +22,8 @@ import httpcore
 import httpx
 from django.conf import settings
 
-from .checks import MAX_BODY_BYTES, evaluate
+from . import check_types
+from .checks import MAX_BODY_BYTES
 from .http_client import BlockedAddressError
 from .security import blocked_reason
 
@@ -36,8 +37,8 @@ class CheckItem:
     method: str = "GET"
     headers: dict = field(default_factory=dict)
     body: str = ""
-    expected_status: str = ""
-    expected_text: str = ""
+    check_type: str = "http_status"
+    check_config: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class CheckRow:
     response_time_ms: int | None
     is_up: bool
     error: str | None
+    details: dict = field(default_factory=dict)
 
 
 # ----------------------------- SSRF at connect time -----------------------------
@@ -102,20 +104,27 @@ def _host_key(url: str) -> str:
     return f"{(parts.hostname or '').lower()}:{parts.port or (443 if parts.scheme == 'https' else 80)}"
 
 
-async def _read_body(response: httpx.Response, deadline: float) -> str:
-    chunks, size = [], 0
+async def _read_body(response: httpx.Response, deadline: float) -> tuple[str, bool]:
+    chunks, size, truncated = [], 0, False
     async for chunk in response.aiter_bytes():
         chunks.append(chunk)
         size += len(chunk)
         if size >= MAX_BODY_BYTES or time.monotonic() > deadline:
+            truncated = True
             break
-    return b"".join(chunks)[:MAX_BODY_BYTES].decode(response.encoding or "utf-8", errors="replace")
+    return b"".join(chunks)[:MAX_BODY_BYTES].decode(response.encoding or "utf-8", errors="replace"), truncated
+
+
+def _down(item: CheckItem, started: datetime, message: str) -> CheckRow:
+    details = {"type": item.check_type, "message": message}
+    return CheckRow(item.monitor_id, started, None, None, False, message, details)
 
 
 async def _check_one(client, item: CheckItem, blocked: str | None) -> CheckRow:
     started = datetime.now(UTC)
     if blocked:
-        return CheckRow(item.monitor_id, started, None, None, False, f"Заблоковано: {blocked}")
+        return _down(item, started, f"Заблоковано: {blocked}")
+    strategy = check_types.get(item.check_type)
     timeout = settings.CHECK_TIMEOUT_SECONDS
     t0 = time.monotonic()
     try:
@@ -128,20 +137,23 @@ async def _check_one(client, item: CheckItem, blocked: str | None) -> CheckRow:
         response = await client.send(request, stream=True)
         try:
             elapsed = round((time.monotonic() - t0) * 1000)
-            want_body = bool(item.expected_text) and item.method != "HEAD"
-            body = await _read_body(response, t0 + timeout) if want_body else ""
-            is_up, error = evaluate(response.status_code, item.expected_status, item.expected_text, body)
-            return CheckRow(item.monitor_id, started, response.status_code, elapsed, is_up, error)
+            text, truncated = "", False
+            if strategy.needs_body and item.method != "HEAD":
+                text, truncated = await _read_body(response, t0 + timeout)
+            result = strategy.evaluate_http(
+                item.check_config, check_types.HttpResponse(response.status_code, text, truncated)
+            )
+            return CheckRow(
+                item.monitor_id, started, response.status_code, elapsed, result.is_up, result.message, result.details
+            )
         finally:
             await response.aclose()
     except httpx.TimeoutException:
-        return CheckRow(item.monitor_id, started, None, None, False, f"Timeout after {timeout}s")
+        return _down(item, started, f"Timeout after {timeout}s")
     except Exception as exc:  # network errors, protocol errors, the connection-level guard...
         if "non-public address" in str(exc):
-            return CheckRow(
-                item.monitor_id, started, None, None, False, "Заблоковано: адреса веде у приватну/внутрішню мережу"
-            )
-        return CheckRow(item.monitor_id, started, None, None, False, f"{type(exc).__name__}: {exc}"[:500])
+            return _down(item, started, "Заблоковано: адреса веде у приватну/внутрішню мережу")
+        return _down(item, started, f"{type(exc).__name__}: {exc}"[:500])
 
 
 async def run_checks(

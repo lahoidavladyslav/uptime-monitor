@@ -7,7 +7,6 @@ never expose the monitored URL, error texts, headers, or anything about the owne
 from django.conf import settings
 from django.contrib.syndication.views import Feed
 from django.core.cache import cache
-from django.db.models import OuterRef, Subquery
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
@@ -17,16 +16,15 @@ from django.utils.feedgenerator import Atom1Feed
 from django.views.decorators.cache import cache_control
 
 from . import maintenance
-from .models import CheckResult, Monitor, StatusPage
-from .services import daily_bars, public_incident_history, uptime_by_monitor
+from .models import Monitor, StatusPage
+from .services import daily_bars, last_is_up_expr, public_incident_history, uptime_by_monitor
 from .signals import group_cache_key, status_cache_key
 
 
 def _annotated(queryset):
     now = timezone.now()
-    latest = CheckResult.objects.filter(monitor=OuterRef("pk")).order_by("-checked_at")
     return queryset.annotate(
-        last_is_up=Subquery(latest.values("is_up")[:1]),
+        last_is_up=last_is_up_expr(now),
         in_maintenance=maintenance.under_maintenance_expr(now),
     )
 
