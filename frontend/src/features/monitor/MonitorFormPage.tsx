@@ -16,6 +16,13 @@ import { NotFoundPage } from "@/components/NotFoundPage";
 import { EmptyState, ErrorState, ListSkeleton } from "@/components/States";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { applyApiErrors } from "@/lib/forms";
+import {
+  buildConfig,
+  CHECK_DEFAULTS,
+  CHECK_TYPES,
+  configErrorsByField,
+  readConfig,
+} from "./checkConfig";
 import { t } from "@/lib/strings";
 import { cn } from "@/lib/utils";
 
@@ -33,10 +40,15 @@ const schema = z.object({
   interval_seconds: z.string(),
   is_active: z.boolean(),
   http_method: z.enum(["GET", "HEAD", "POST"]),
-  expected_status: z.string(),
   request_headers: z.string(),
   request_body: z.string(),
-  expected_text: z.string(),
+  check_type: z.enum(CHECK_TYPES),
+  cfg_statuses: z.string(),
+  cfg_keyword: z.string(),
+  cfg_must_contain: z.boolean(),
+  cfg_path: z.string(),
+  cfg_equals: z.string(),
+  cfg_min_days: z.string(),
   is_public: z.boolean(),
   public_title: z.string(),
   public_logo_url: z.string(),
@@ -44,24 +56,36 @@ const schema = z.object({
 type Values = z.infer<typeof schema>;
 
 const FIELDS = Object.keys(schema.shape);
-const ADVANCED = ["request_headers", "request_body", "expected_text"];
+const ADVANCED = ["request_headers", "request_body"];
 const DEFAULTS: Values = {
   name: "",
   url: "",
   interval_seconds: "300",
   is_active: true,
   http_method: "GET",
-  expected_status: "",
   request_headers: "",
   request_body: "",
-  expected_text: "",
+  ...CHECK_DEFAULTS,
   is_public: false,
   public_title: "",
   public_logo_url: "",
 };
 
 function toBody(v: Values): MonitorInput {
-  return { ...v, interval_seconds: Number(v.interval_seconds) };
+  return {
+    name: v.name,
+    url: v.url,
+    interval_seconds: Number(v.interval_seconds),
+    is_active: v.is_active,
+    http_method: v.http_method,
+    request_headers: v.request_headers,
+    request_body: v.request_body,
+    check_type: v.check_type,
+    check_config: buildConfig(v),
+    is_public: v.is_public,
+    public_title: v.public_title,
+    public_logo_url: v.public_logo_url,
+  };
 }
 
 export function MonitorFormPage() {
@@ -102,7 +126,19 @@ function EditLoader({ id }: { id: number }) {
   return (
     <MonitorForm
       id={id}
-      initial={{ ...c, interval_seconds: String(c.interval_seconds) } as Values}
+      initial={{
+        name: c.name,
+        url: c.url,
+        interval_seconds: String(c.interval_seconds),
+        is_active: c.is_active,
+        http_method: c.http_method,
+        request_headers: c.request_headers,
+        request_body: c.request_body,
+        ...readConfig(c.check_type, c.check_config),
+        is_public: c.is_public,
+        public_title: c.public_title,
+        public_logo_url: c.public_logo_url,
+      }}
     />
   );
 }
@@ -121,6 +157,7 @@ function MonitorForm({ id, initial }: { id: number | null; initial?: Values }) {
   const { errors } = formState;
   const method = useWatch({ control, name: "http_method" });
   const isPublic = useWatch({ control, name: "is_public" });
+  const checkType = useWatch({ control, name: "check_type" });
   const errorCount = Object.keys(errors).filter((k) => k !== "root").length;
 
   // a rejected field inside the collapsed section must not stay hidden
@@ -131,6 +168,21 @@ function MonitorForm({ id, initial }: { id: number | null; initial?: Values }) {
     save.mutate(toBody(values), {
       onSuccess: (saved) => navigate(`/monitors/${saved.id}`),
       onError: (e) => {
+        if (e instanceof ApiError && e.fieldErrors.check_config) {
+          // "keyword: is required" -> under the keyword input; the rest is handled as usual
+          const { check_config, ...rest } = e.fieldErrors;
+          for (const [name, message] of Object.entries(
+            configErrorsByField(check_config),
+          )) {
+            setError(name as keyof Values, { message });
+          }
+          applyApiErrors(
+            new ApiError(e.status, e.message, rest),
+            setError,
+            FIELDS,
+          );
+          return;
+        }
         applyApiErrors(e, setError, FIELDS);
       },
     });
@@ -202,13 +254,70 @@ function MonitorForm({ id, initial }: { id: number | null; initial?: Values }) {
               <option key={m}>{m}</option>
             ))}
           </FormSelect>
-          <FormField
-            label={t.monitorForm.expectedStatus}
-            hint={t.monitorForm.expectedStatusHint}
-            error={errors.expected_status?.message}
-            {...register("expected_status")}
-          />
+          <FormSelect
+            label={t.monitorForm.checkType}
+            hint={t.monitorForm.checkTypeHints[checkType]}
+            error={errors.check_type?.message}
+            {...register("check_type")}
+          >
+            {CHECK_TYPES.map((k) => (
+              <option key={k} value={k}>
+                {t.monitorForm.checkTypes[k]}
+              </option>
+            ))}
+          </FormSelect>
         </div>
+        {checkType === "keyword" && (
+          <div className="flex flex-col gap-3">
+            <FormField
+              label={t.monitorForm.keyword}
+              maxLength={200}
+              error={errors.cfg_keyword?.message}
+              {...register("cfg_keyword")}
+            />
+            <FormCheckbox
+              label={t.monitorForm.mustContain}
+              hint={t.monitorForm.mustContainHint}
+              {...register("cfg_must_contain")}
+            />
+          </div>
+        )}
+        {checkType === "json_path" && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField
+              label={t.monitorForm.jsonPath}
+              hint={t.monitorForm.jsonPathHint}
+              placeholder="status.db"
+              error={errors.cfg_path?.message}
+              {...register("cfg_path")}
+            />
+            <FormField
+              label={t.monitorForm.jsonEquals}
+              hint={t.monitorForm.jsonEqualsHint}
+              placeholder="ok"
+              error={errors.cfg_equals?.message}
+              {...register("cfg_equals")}
+            />
+          </div>
+        )}
+        {checkType === "ssl_expiry" && (
+          <FormField
+            label={t.monitorForm.minDays}
+            type="number"
+            min={1}
+            max={365}
+            error={errors.cfg_min_days?.message}
+            {...register("cfg_min_days")}
+          />
+        )}
+        {checkType !== "ssl_expiry" && (
+          <FormField
+            label={t.monitorForm.statuses}
+            hint={t.monitorForm.statusesHint}
+            error={errors.cfg_statuses?.message}
+            {...register("cfg_statuses")}
+          />
+        )}
         <details
           open={advancedOpen || advancedForced}
           onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
@@ -230,13 +339,6 @@ function MonitorForm({ id, initial }: { id: number | null; initial?: Values }) {
               disabled={method !== "POST"}
               error={errors.request_body?.message}
               {...register("request_body")}
-            />
-            <FormField
-              label={t.monitorForm.expectedText}
-              hint={t.monitorForm.expectedTextHint}
-              disabled={method === "HEAD"}
-              error={errors.expected_text?.message}
-              {...register("expected_text")}
             />
           </div>
         </details>

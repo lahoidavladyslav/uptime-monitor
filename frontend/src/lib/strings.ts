@@ -2,7 +2,8 @@
 export const t = {
   appName: "Uptime Monitor",
   errors: {
-    network: "Немає з'єднання з сервером. Перевірте інтернет і спробуйте ще раз.",
+    network:
+      "Немає з'єднання з сервером. Перевірте інтернет і спробуйте ще раз.",
     server: "Сервер тимчасово недоступний. Спробуйте за хвилину.",
     session: "Сесія завершилась. Увійдіть знову.",
     generic: "Щось пішло не так. Спробуйте ще раз.",
@@ -68,11 +69,13 @@ export const t = {
     confirmed: "Email підтверджено. Тепер можна увійти.",
     resendTitle: "Надіслати лист ще раз",
     resend: "Надіслати",
-    resendDone: "Якщо такий неактивований акаунт існує, ми надіслали лист повторно.",
+    resendDone:
+      "Якщо такий неактивований акаунт існує, ми надіслали лист повторно.",
     resendLink: "Надіслати лист підтвердження ще раз",
     forgotTitle: "Скидання пароля",
     forgotSend: "Надіслати посилання",
-    forgotDone: "Якщо акаунт із таким email існує, ми надіслали інструкцію зі скидання пароля.",
+    forgotDone:
+      "Якщо акаунт із таким email існує, ми надіслали інструкцію зі скидання пароля.",
     resetTitle: "Новий пароль",
     newPassword1: "Новий пароль",
     newPassword2: "Підтвердження нового пароля",
@@ -96,7 +99,8 @@ export const t = {
     uptime24h: "Uptime 24 год",
     lastCheck: "Остання перевірка",
     emptyTitle: "Моніторів ще немає",
-    emptyBody: "Додайте перший сайт, і ми почнемо перевіряти його кожну хвилину.",
+    emptyBody:
+      "Додайте перший сайт, і ми почнемо перевіряти його кожну хвилину.",
     addFirst: "Додати монітор",
     noMatchTitle: "Нічого не знайдено",
     noMatchBody: "Змініть пошук або фільтр за статусом.",
@@ -113,27 +117,57 @@ export const t = {
     name: "Назва",
     url: "URL",
     interval: "Інтервал",
-    intervals: { "60": "1 хвилина", "300": "5 хвилин", "900": "15 хвилин" } as Record<string, string>,
+    intervals: {
+      "60": "1 хвилина",
+      "300": "5 хвилин",
+      "900": "15 хвилин",
+    } as Record<string, string>,
     active: "Активний",
     activeHint: "Вимкнений монітор на паузі: перевірки не виконуються.",
     method: "Метод",
-    expectedStatus: "Очікувані коди",
-    expectedStatusHint: "Напр. 200,204,300-399. Порожньо = будь-який 2xx/3xx.",
+    checkType: "Що перевіряємо",
+    checkTypes: {
+      http_status: "HTTP-статус",
+      keyword: "Ключове слово у відповіді",
+      json_path: "Значення в JSON",
+      ssl_expiry: "Термін дії SSL-сертифіката",
+    } as Record<string, string>,
+    checkTypeHints: {
+      http_status: "Сайт відповідає потрібним статусом.",
+      keyword:
+        "У тілі відповіді є (або немає) певне слово. Читається перший 1 МБ.",
+      json_path: "Поле в JSON-відповіді має конкретне значення.",
+      ssl_expiry:
+        "Сертифікат дійсний ще не менше N днів. Перевіряється раз на добу, лише для https.",
+    } as Record<string, string>,
+    statuses: "Дозволені коди",
+    statusesHint: "Напр. 200,204,300-399. Порожньо = будь-який 2xx/3xx.",
+    keyword: "Слово",
+    mustContain: "Слово має бути у відповіді",
+    mustContainHint:
+      "Зніміть позначку, щоб падати, коли слово ЗʼЯВИЛОСЬ (напр. «Maintenance»).",
+    jsonPath: "Шлях у JSON",
+    jsonPathHint: "Напр. status.db або items.0.name",
+    jsonEquals: "Очікуване значення",
+    jsonEqualsHint:
+      'ok, 200, true, null; рядок із цифрами беріть у лапки: "200".',
+    minDays: "Мінімум днів до спливання",
     advanced: "Розширені налаштування",
     headers: "Заголовки",
     headersHint: "По одному в рядку: Name: value (до 10).",
     body: "Тіло запиту",
     bodyHint: "Лише для POST.",
-    expectedText: "Очікуваний текст",
-    expectedTextHint: "Має бути у тілі відповіді (не для HEAD).",
     isPublic: "Публічна сторінка",
-    isPublicHint: "Будь-хто за посиланням побачить статус і uptime (без URL і текстів помилок).",
+    isPublicHint:
+      "Будь-хто за посиланням побачить статус і uptime (без URL і текстів помилок).",
     publicTitle: "Назва на публічній сторінці",
     publicLogo: "Логотип (URL)",
-    fixFields: (n: number) => (n === 1 ? "Виправте виділене поле." : `Виправте виділені поля (${n}).`),
+    fixFields: (n: number) =>
+      n === 1 ? "Виправте виділене поле." : `Виправте виділені поля (${n}).`,
     delete: "Видалити монітор",
     deleteTitle: "Видалити монітор?",
-    deleteBody: "Монітор буде видалено разом з історією перевірок та інцидентів. Це не можна скасувати.",
+    deleteBody:
+      "Монітор буде видалено разом з історією перевірок та інцидентів. Це не можна скасувати.",
     deleteConfirm: "Видалити назавжди",
     deleteCancel: "Скасувати",
     cancel: "Скасувати",
@@ -147,10 +181,26 @@ export const t = {
     checkNow: "Перевірити зараз",
     checkQueued: "Перевірку запущено",
     lastCheck: "Остання перевірка",
-    tabs: { overview: "Огляд", checks: "Перевірки", incidents: "Інциденти", label: "Розділи монітора" },
+    tabs: {
+      overview: "Огляд",
+      checks: "Перевірки",
+      incidents: "Інциденти",
+      label: "Розділи монітора",
+    },
     period: { "24h": "24 години", "7d": "7 днів", label: "Період" },
-    uptimeCards: { h24: "Uptime 24 год", d7: "Uptime 7 днів", d30: "Uptime 30 днів", d90: "Uptime 90 днів" },
-    stats: { avg: "Середній час", min: "Мінімум", max: "Максимум", failures: "Падінь", checks: "Перевірок" },
+    uptimeCards: {
+      h24: "Uptime 24 год",
+      d7: "Uptime 7 днів",
+      d30: "Uptime 30 днів",
+      d90: "Uptime 90 днів",
+    },
+    stats: {
+      avg: "Середній час",
+      min: "Мінімум",
+      max: "Максимум",
+      failures: "Падінь",
+      checks: "Перевірок",
+    },
     ms: (n: number) => `${n} мс`,
     chartTitle: "Час відповіді",
     chartLabel: (min: number, max: number) => `Час відповіді: ${min}–${max} мс`,
@@ -170,13 +220,22 @@ export const t = {
     ssl: "SSL-сертифікат",
     sslDays: (n: number) => `діє ще ${n} дн`,
     sslNone: "Перевірка ще не виконувалась",
-    checksTable: { time: "Час", code: "Код", rt: "Відповідь", result: "Результат", error: "Помилка", up: "OK", down: "Збій" },
+    checksTable: {
+      time: "Час",
+      code: "Код",
+      rt: "Відповідь",
+      result: "Результат",
+      error: "Помилка",
+      up: "OK",
+      down: "Збій",
+    },
     onlyFailed: "Лише падіння",
     prev: "Назад",
     next: "Далі",
     pageOf: (p: number, n: number) => `Сторінка ${p} з ${n}`,
     checksEmpty: "Перевірок ще не було",
-    checksEmptyBody: "Перша перевірка з'явиться за хвилину або натисніть «Перевірити зараз».",
+    checksEmptyBody:
+      "Перша перевірка з'явиться за хвилину або натисніть «Перевірити зараз».",
     checksEmptyFailed: "Падінь не було",
     incidentsEmpty: "Інцидентів не було",
     incidentsEmptyBody: "Тут з'являться періоди, коли сайт був недоступний.",
@@ -205,7 +264,9 @@ export const t = {
       const d = Math.floor(minutes / 1440);
       const h = Math.floor((minutes % 1440) / 60);
       const m = minutes % 60;
-      return [d && `${d} дн`, h && `${h} год`, (m || (!d && !h)) && `${m} хв`].filter(Boolean).join(" ");
+      return [d && `${d} дн`, h && `${h} год`, (m || (!d && !h)) && `${m} хв`]
+        .filter(Boolean)
+        .join(" ");
     },
   },
   notFound: {
