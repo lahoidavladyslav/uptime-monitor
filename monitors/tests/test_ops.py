@@ -248,3 +248,22 @@ def test_production_refuses_a_malformed_encryption_key():
         text=True,
     )
     assert r.returncode != 0 and "TOTP_ENCRYPTION_KEYS" in r.stderr
+
+
+# ---------------- debug toolbar is development-only ----------------
+def _installed_apps(env):
+    code = "import django; django.setup(); from django.conf import settings; print('debug_toolbar' in settings.INSTALLED_APPS)"
+    clean = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("SECRET_KEY", "ALLOWED_HOSTS", "DJANGO_ENV", "DEBUG", "DEBUG_TOOLBAR")
+    }
+    r = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env={**clean, **env}, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return r.stdout.strip() == "True"
+
+
+def test_the_debug_toolbar_is_off_by_default_on_in_dev_when_asked_and_never_in_production():
+    assert _installed_apps({}) is False
+    assert _installed_apps({"DEBUG_TOOLBAR": "1"}) is True
+    assert _installed_apps({**PROD, "DEBUG_TOOLBAR": "1"}) is False  # production forces DEBUG off

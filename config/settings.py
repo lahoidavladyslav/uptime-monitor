@@ -201,7 +201,7 @@ ALLOW_PRIVATE_TARGETS = os.environ.get("ALLOW_PRIVATE_TARGETS", "0") == "1"
 CHECK_NOW_COOLDOWN_SECONDS = 10
 MAX_IN_PROGRESS_REPORTS = 3
 CHECK_TIMEOUT_SECONDS = 10
-CHECK_RETENTION_DAYS = 7  # raw checks; everything older is served from the hourly rollups
+CHECK_RETENTION_DAYS = int(os.environ.get("CHECK_RETENTION_DAYS", "7"))  # raw checks; older data lives in the rollups
 ROLLUP_RETENTION_DAYS = 365
 CLEANUP_BATCH_SIZE = 5000
 LOGIN_EVENT_RETENTION_DAYS = 90
@@ -263,6 +263,20 @@ if PRODUCTION:
     SECURE_REFERRER_POLICY = "same-origin"
     X_FRAME_OPTIONS = "DENY"
     EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+
+# django-debug-toolbar: development only, and only when asked for (docker-compose.perf.yml sets DEBUG_TOOLBAR=1).
+# It can never be switched on in production: the guard checks DEBUG, which production forces off.
+if DEBUG and os.environ.get("DEBUG_TOOLBAR") == "1":
+    try:
+        import debug_toolbar  # noqa: F401
+    except ImportError:
+        pass
+    else:
+        INSTALLED_APPS += ["debug_toolbar"]
+        MIDDLEWARE.insert(1, "debug_toolbar.middleware.DebugToolbarMiddleware")
+        DEBUG_TOOLBAR_CONFIG = {
+            "SHOW_TOOLBAR_CALLBACK": lambda request: True
+        }  # inside docker the client IP is the gateway
 
 # Swagger UI and the schema describe every endpoint: not for strangers in production (API_DOCS=1 re-enables).
 API_DOCS_ENABLED = os.environ.get("API_DOCS", "0" if PRODUCTION else "1") == "1"

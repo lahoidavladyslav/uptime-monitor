@@ -19,6 +19,8 @@ x-app: &app
 services:
   db:
     image: postgres:16
+    # pg_stat_statements: which SQL costs what (docs/perf.md); track_io_timing makes EXPLAIN (BUFFERS) show I/O time
+    command: postgres -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c track_io_timing=on
     environment: {POSTGRES_DB: uptime, POSTGRES_USER: uptime, POSTGRES_PASSWORD: uptime}
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:

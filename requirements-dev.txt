@@ -8,3 +8,4 @@ pre-commit
 pip-audit
 pyyaml
 aiohttp>=3.9
+django-debug-toolbar>=4.4
