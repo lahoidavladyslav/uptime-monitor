@@ -135,6 +135,7 @@ class Command(BaseCommand):
                 hi = min(written + chunk, total)
                 cur.execute(CHECKS_SQL, {**params, "lo": written, "hi": hi})
                 written = hi
+        self._status_page(user, ids)
         rollups.build(start, end + timedelta(days=1))
         with connection.cursor() as cur:
             cur.execute("ANALYZE monitors_checkresult")
@@ -145,6 +146,16 @@ class Command(BaseCommand):
                 f"Seeded {monitors} monitors, {total} checks over {days} days, {windows_per_monitor * monitors} incidents."
             )
         )
+
+    @staticmethod
+    def _status_page(user, ids):
+        """A public page over the first 50 monitors: the public-page scenario of perf_report needs one."""
+        from monitors.models import StatusPage
+
+        first = ids[:50]
+        Monitor.objects.filter(pk__in=first).update(is_public=True)
+        page = StatusPage.objects.create(user=user, title="Perf status", slug="perf-status", is_public=True)
+        page.monitors.set(first)
 
     def _clean(self, User):
         monitors = Monitor.objects.filter(name__startswith=PREFIX)
