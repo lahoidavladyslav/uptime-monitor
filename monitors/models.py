@@ -2,12 +2,15 @@ import secrets
 import uuid
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.db import models
 from django.db.models import Func, Q, Value
 from django.utils import timezone
 
 from accounts.fields import EncryptedTextField
+
+from . import check_types
 
 http_url_validator = URLValidator(schemes=["http", "https"])
 
@@ -28,6 +31,10 @@ class Monitor(models.Model):
     public_slug = models.CharField(max_length=32, unique=True, null=True, blank=True)
     last_checked_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # --- what is checked (see check_types.py) ---
+    check_type = models.CharField("Тип перевірки", max_length=20, choices=check_types.CHOICES, default="http_status")
+    check_config = models.JSONField("Налаштування перевірки", default=dict, blank=True)
 
     # --- advanced check configuration ---
     METHOD_CHOICES = [("GET", "GET"), ("HEAD", "HEAD"), ("POST", "POST")]
@@ -68,7 +75,27 @@ class Monitor(models.Model):
     def public_name(self):
         return self.public_title or self.name
 
+    def clean(self):
+        super().clean()
+        errors = {}
+        try:
+            self.check_config = check_types.validate_config(self.check_type, self.check_config)
+        except ValidationError as exc:
+            for field, messages in exc.message_dict.items():
+                if field == "check_type":
+                    errors["check_type"] = messages
+                else:
+                    errors.setdefault("check_config", []).extend(f"{field}: {m}" for m in messages)
+        if self.check_type == "ssl_expiry" and not (self.url or "").lower().startswith("https://"):
+            errors["url"] = ["Перевірка терміну SSL можлива лише для https-адреси."]
+        if errors:
+            raise ValidationError(errors)
+
     def save(self, *args, **kwargs):
+        # An invalid check config must never reach the database, whichever way the monitor is written.
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or {"check_type", "check_config", "url"} & set(update_fields):
+            self.clean()
         # Slug is generated once, on first publication, and then never changes.
         if self.is_public and not self.public_slug:
             self.public_slug = secrets.token_urlsafe(9)
@@ -100,6 +127,8 @@ class CheckResult(models.Model):
     region = models.CharField(max_length=16, default="eu")  # which region's worker made the request
     # stamped at write time: the check ran inside a maintenance window, so it counts towards no uptime/average
     in_maintenance = models.BooleanField(default=False)
+    # why the check failed, structured: {"type": "keyword", "status_code": 200, "message": "keyword 'Welcome' not found"}
+    details = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["-checked_at", "-id"]
