@@ -149,27 +149,84 @@ class DashboardRow:
     spark: list[int | None]
 
 
-def dashboard_queryset(user, now=None):
-    """All per-monitor numbers for the dashboard in ONE query (Subquery + Count(filter=...))."""
-    from django.db.models import OuterRef, Subquery
+LAST_CHECK_WINDOW = timedelta(days=2)
+
+
+def last_is_up_expr(now=None):
+    """Result of the monitor's newest check, for `annotate(last_is_up=...)` (NULL = never checked).
+
+    A monitor is normally checked every few minutes, so the newest row is in the last two daily partitions. The first
+    subquery looks only there (partition pruning); the unbounded fallback, which has to walk every partition, runs only
+    when that finds nothing (a paused or brand-new monitor): COALESCE evaluates it lazily. The answer is identical to
+    the old unbounded `ORDER BY checked_at DESC LIMIT 1`, which cost one index probe per partition per monitor.
+    """
+    from django.db.models import BooleanField, OuterRef, Subquery
+    from django.db.models.functions import Coalesce
+
+    now = now or timezone.now()
+    base = CheckResult.objects.filter(monitor=OuterRef("pk")).order_by("-checked_at")
+    recent = base.filter(checked_at__gte=now - LAST_CHECK_WINDOW)
+    return Coalesce(
+        Subquery(recent.values("is_up")[:1], output_field=BooleanField()),
+        Subquery(base.values("is_up")[:1], output_field=BooleanField()),
+        output_field=BooleanField(),
+    )
+
+
+def dashboard_queryset(user, now=None, *, counts=True):
+    """All per-monitor numbers for the dashboard in ONE query.
+
+    The 24h counters are correlated subqueries bounded by `checked_at >= since`, so Postgres prunes the daily
+    partitions to the last two. (The earlier `Count("checks", filter=...)` was a LEFT JOIN with the time condition in
+    the aggregate FILTER: it read every partition, i.e. the whole table.)
+
+    `counts=False` leaves the counters out: list pages fetch them for all monitors at once with `attach_counts_24h`
+    (one grouped query instead of two subqueries per row).
+    """
+    from django.db.models import IntegerField, OuterRef, Subquery
+    from django.db.models.functions import Coalesce
 
     from .models import Monitor
     from .tasks import under_maintenance
 
     now = now or timezone.now()
     since = now - timedelta(hours=24)
-    latest = CheckResult.objects.filter(monitor=OuterRef("pk")).order_by("-checked_at")
     open_incident = Incident.objects.filter(monitor=OuterRef("pk"), resolved_at__isnull=True)
-    return Monitor.objects.filter(user=user).annotate(
-        last_is_up=Subquery(latest.values("is_up")[:1]),
+    # samples taken during maintenance count towards neither side of the uptime ratio
+    recent = CheckResult.objects.filter(monitor=OuterRef("pk"), checked_at__gte=since, in_maintenance=False)
+
+    def count(qs):
+        return Coalesce(
+            Subquery(qs.order_by().values("monitor").annotate(n=Count("pk")).values("n"), output_field=IntegerField()),
+            0,
+        )
+
+    qs = Monitor.objects.filter(user=user).annotate(
+        last_is_up=last_is_up_expr(now),
         down_since=Subquery(open_incident.values("started_at")[:1]),
         in_maintenance=under_maintenance(now),
-        # samples taken during maintenance count towards neither side of the uptime ratio
-        checks_24h=Count("checks", filter=Q(checks__checked_at__gte=since, checks__in_maintenance=False)),
-        up_24h=Count(
-            "checks", filter=Q(checks__checked_at__gte=since, checks__is_up=True, checks__in_maintenance=False)
-        ),
     )
+    if counts:
+        qs = qs.annotate(checks_24h=count(recent), up_24h=count(recent.filter(is_up=True)))
+    return qs
+
+
+def attach_counts_24h(monitors, now=None):
+    """Set `checks_24h` / `up_24h` on every monitor with ONE grouped query bounded to the last 24 h."""
+    monitors = list(monitors)
+    now = now or timezone.now()
+    rows = (
+        CheckResult.objects.filter(
+            monitor_id__in=[m.pk for m in monitors], checked_at__gte=now - timedelta(hours=24), in_maintenance=False
+        )
+        .order_by()
+        .values("monitor_id")
+        .annotate(total=Count("pk"), up=Count("pk", filter=Q(is_up=True)))
+    )
+    found = {r["monitor_id"]: (r["total"], r["up"]) for r in rows}
+    for m in monitors:
+        m.checks_24h, m.up_24h = found.get(m.pk, (0, 0))
+    return monitors
 
 
 def sparklines(monitor_ids, now=None):
@@ -212,7 +269,7 @@ def monitor_status(m):
 
 def dashboard_rows(user, now=None):
     now = now or timezone.now()
-    monitors = list(dashboard_queryset(user, now))
+    monitors = attach_counts_24h(dashboard_queryset(user, now, counts=False), now)
     sparks = sparklines([m.pk for m in monitors], now)
     return [
         DashboardRow(
